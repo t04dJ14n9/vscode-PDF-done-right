@@ -84,6 +84,8 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "pdfjs-dist": "^4.0.0"
+    "@embedpdf/engines": "^2.14.0",
+    "@embedpdf/models": "^2.14.0",
+    "@embedpdf/pdfium": "^2.14.0"
   }
 }

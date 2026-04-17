@@ -228,14 +228,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
   }
 
   private getHtml(webview: vscode.Webview): string {
-    const pdfJsUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'pdf.mjs')
-    );
-    const pdfWorkerUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'pdf.worker.mjs')
-    );
     const viewerJsUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'pdf-viewer.js')
+    );
+    const wasmUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'pdfium.wasm')
     );
     const nonce = getNonce();
 
@@ -246,11 +243,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none';
-    script-src 'nonce-${nonce}' ${webview.cspSource};
+    script-src 'nonce-${nonce}' 'wasm-unsafe-eval' ${webview.cspSource};
     style-src 'unsafe-inline' ${webview.cspSource};
     img-src ${webview.cspSource} blob: data:;
     font-src ${webview.cspSource};
-    worker-src blob: ${webview.cspSource};">
+    connect-src ${webview.cspSource};">
   <title>PaperLink PDF Viewer</title>
   <style>
     :root {
@@ -412,12 +409,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     <div id="page-container"></div>
   </div>
 
-  <script nonce="${nonce}" src="${viewerJsUri}"></script>
-  <script nonce="${nonce}" type="module">
-    import * as pdfjsLib from "${pdfJsUri}";
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "${pdfWorkerUri}";
-    window.__initPdfViewer(pdfjsLib);
+  <script nonce="${nonce}">
+    window.__pdfiumWasmUrl = "${wasmUri}";
   </script>
+  <script nonce="${nonce}" src="${viewerJsUri}"></script>
 </body>
 </html>`;
   }
