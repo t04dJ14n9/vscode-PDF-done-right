@@ -5,12 +5,25 @@
 **Link Markdown notes to PDF passages. Navigate between them. Annotate without leaving your editor.**
 
 [![Build](https://img.shields.io/badge/build-passing-brightgreen)]() 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)]()
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-green)]()
 
 [📚 Quick Start](#quick-start) • [🏗️ Architecture](#architecture) • [👨‍💻 Development](#development) • [📖 Full Docs](#documentation)
 
 </div>
+
+---
+
+## ✨ What's new in 0.2.0
+
+- **Shared JSON index** — `<gitRoot>/.paperlink/index.json` replaces per-PDF sidecars. One file, text-based, deterministic sort + atomic writes, git-friendly diffs, mergeable across collaborators. Committed to git → teammates see your highlights after cloning.
+- **Reference popover** — Click a highlighted passage in a PDF to see which markdown notes reference it, with file path + line number. Click an item to jump to the note.
+- **Backlinks sidebar** — New PaperLink activity-bar icon opens a right-panel with two sections: `Backlinks (N)` (who points at this file) and `Outgoing (N)` (what this file points at). Works for both `*.md` and `*.pdf` as the active file.
+- **Outline cleanup** — PDF outline is now shown only while a PDF is active, under the plain name **OUTLINE**.
+- **Auto-rewrite on file rename** — Rename or move a PDF inside VS Code and every `@pdf[[…]]` token in every referencing `.md` is updated as one undo unit; the index.json follows. Same for markdown renames (updates `source` in the index).
+- **Markdown editor scaffold** — Placeholder CustomTextEditor for `*.md` reserves the integration point for a future Obsidian-like rich editor. `priority: "option"` so it never steals the default open.
+
+> **Migration**: on first run with 0.2.0, any `*.paperlink.json` sidecars are merged into `index.json` and then deleted.
 
 ---
 
@@ -22,10 +35,50 @@ PaperLink is a VS Code extension that creates **seamless bidirectional links** b
 - ✅ **PDF Links in Markdown** — Reference PDFs with special syntax: `@pdf[[path/to/paper.pdf#page=5|"snippet"]]`
 - ✅ **Click to Navigate** — Click links in Markdown to jump to exact locations in PDFs
 - ✅ **Text Selection** — Select text in PDFs and copy/insert links back to Markdown
-- ✅ **Annotations** — Create highlighted annotations in PDFs linked to specific Markdown notes
-- ✅ **PDF Outlines** — Browse PDF bookmarks in VS Code sidebar
+- ✅ **Reference Popover** — Click a highlight to see every markdown note referencing that passage
+- ✅ **Backlinks Sidebar** — Obsidian-style Backlinks/Outgoing panel in the right sidebar
+- ✅ **Shared JSON Index** — `.paperlink/index.json` is your portable knowledge graph (committed to git)
+- ✅ **Rename-aware** — Moving / renaming a PDF rewrites every `.md` that references it, atomically
+- ✅ **PDF Outline** — Browse PDF bookmarks in VS Code sidebar while a PDF is active
 - ✅ **Markdown Preview** — PDF links render beautifully in markdown preview
-- ✅ **Persistent Storage** — Annotations stored as sidecar JSON files alongside PDFs
+
+---
+
+## 📂 Storage model
+
+A single JSON file lives at `<gitRoot>/.paperlink/index.json`:
+
+```json
+{
+  "version": 2,
+  "annotations": [
+    { "pdf": "papers/attention.pdf", "page": 5,
+      "anchor": "page=5&idx=12&off=5&len=40",
+      "snippet": "self-attention", "color": "rgba(255,230,0,0.35)",
+      "createdAt": "2026-04-19T10:15:00Z" }
+  ],
+  "references": [
+    { "source": "notes.md", "sourceLine": 9, "sourceCol": 4, "sourceLength": 60,
+      "pdf": "papers/attention.pdf", "page": 5,
+      "anchor": "page=5&idx=12&off=5&len=40",
+      "snippet": "self-attention" }
+  ]
+}
+```
+
+- **Commit** `index.json` to share annotations across machines.
+- Do **not** edit by hand while VS Code is running — PaperLink rewrites it on every change.
+- On save, entries are sorted deterministically by `(pdf, page, anchor)` / `(source, line, col)` so concurrent collaborators editing different passages produce non-overlapping diffs that git auto-merges.
+
+### File renames
+
+When a PDF or `.md` is renamed/moved inside VS Code (drag in Explorer, F2, refactor), PaperLink:
+
+1. Builds a single `WorkspaceEdit` that rewrites every `@pdf[[oldPath#…]]` token in every affected `.md`.
+2. Applies it — one undo unit.
+3. Updates `index.json` paths accordingly.
+
+Renames performed **outside** VS Code (e.g. `git mv` on the terminal) are not detected live. Run the command `PaperLink: Refresh Reference Index` to reconcile.
 
 ---
 

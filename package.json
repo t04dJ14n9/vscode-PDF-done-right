@@ -2,7 +2,7 @@
   "name": "paper-link",
   "displayName": "PaperLink",
   "description": "Bidirectional links between PDF annotations and Markdown notes",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "paper-link",
   "license": "MIT",
   "engines": {
@@ -14,7 +14,9 @@
   ],
   "activationEvents": [
     "onLanguage:markdown",
-    "onCustomEditor:paperlink.pdfViewer"
+    "onCustomEditor:paperlink.pdfViewer",
+    "workspaceContains:**/*.pdf",
+    "workspaceContains:**/*.md"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -28,17 +30,19 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "paperlink.markdownEditor",
+        "displayName": "PaperLink Markdown Editor (preview)",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
-      {
-        "command": "paperlink.createAnnotationLink",
-        "title": "PaperLink: Copy PDF Link to Clipboard"
-      },
-      {
-        "command": "paperlink.insertPdfLink",
-        "title": "PaperLink: Insert PDF Link at Cursor"
-      },
       {
         "command": "paperlink.showAnnotations",
         "title": "PaperLink: Show All Annotations for Current PDF"
@@ -46,8 +50,35 @@
       {
         "command": "paperlink.outlineGoToPage",
         "title": "Go to Page"
+      },
+      {
+        "command": "paperlink.refreshIndex",
+        "title": "PaperLink: Refresh Reference Index"
+      },
+      {
+        "command": "paperlink.openBacklink",
+        "title": "PaperLink: Open Backlink",
+        "enablement": "false"
+      },
+      {
+        "command": "paperlink.openMarkdownAtLocation",
+        "title": "PaperLink: Open Markdown At Location",
+        "enablement": "false"
+      },
+      {
+        "command": "paperlink.openInMarkdownEditor",
+        "title": "PaperLink: Open In Obsidian-style Editor (preview)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "paperlink",
+          "title": "PaperLink",
+          "icon": "resources/sidebar.svg"
+        }
+      ]
+    },
     "views": {
       "explorer": [
         {
@@ -56,7 +87,24 @@
           "when": "paperlink.pdfOpen",
           "icon": "$(book)"
         }
+      ],
+      "paperlink": [
+        {
+          "id": "paperlink.backlinks",
+          "name": "Backlinks",
+          "icon": "$(references)"
+        }
       ]
+    },
+    "configuration": {
+      "title": "PaperLink",
+      "properties": {
+        "paperlink.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Emit verbose debug output to the PaperLink output channel."
+        }
+      }
     },
     "markdown.markdownItPlugins": true,
     "markdown.previewScripts": [
@@ -75,13 +123,16 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
     "@vscode/test-electron": "^2.5.2",
     "copy-webpack-plugin": "^12.0.0",
     "mocha": "^11.7.5",
+    "playwright": "^1.59.1",
     "ts-loader": "^9.5.1",
     "typescript": "^5.3.0",
     "webpack": "^5.89.0",
-    "webpack-cli": "^5.1.4"
+    "webpack-cli": "^5.1.4",
+    "ws": "^8.20.0"
   },
   "dependencies": {
     "@embedpdf/engines": "^2.14.0",

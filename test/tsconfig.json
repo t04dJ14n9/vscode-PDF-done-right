@@ -2,9 +2,9 @@
   "compilerOptions": {
     "module": "commonjs",
     "target": "ES2021",
-    "lib": ["ES2021"],
-    "outDir": "../out/test",
-    "rootDir": ".",
+    "lib": ["ES2021", "DOM"],
+    "outDir": "../out",
+    "rootDir": "..",
     "sourceMap": true,
     "strict": true,
     "esModuleInterop": true,
@@ -12,6 +12,6 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["./**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["./**/*.ts", "../src/**/*.ts"],
+  "exclude": ["node_modules", "../webview-src"]
 }

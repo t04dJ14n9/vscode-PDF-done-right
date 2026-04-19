@@ -3,3 +3,9 @@ dist/
 out/
 *.vsix
 .vscode-test/
+
+# added by paper-link 0.2.0
+.codebuddy/
+.paperlink/
+test/screenshots/
+/tmp-*

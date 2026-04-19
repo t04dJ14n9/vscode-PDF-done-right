@@ -6,10 +6,8 @@
 
 import { createPdfiumEngine } from '@embedpdf/engines/pdfium-direct-engine';
 
-// VS Code webview API — must be called exactly once
 const vscode = acquireVsCodeApi();
 
-// Engine is set during initialization
 let engine: any;
 let pdfDoc: any;
 
@@ -21,13 +19,21 @@ interface PdfAnchor {
   snippet: string;
 }
 
-interface Annotation {
-  id: string;
+interface HighlightSpec {
   anchor: PdfAnchor;
-  markdownFile: string;
-  blockRef?: string;
-  color: string;
-  createdAt: string;
+  /** 'referenced' = green (has markdown backlinks), 'annotated' = yellow (orphan). */
+  kind: 'referenced' | 'annotated';
+  color?: string; // optional override for annotated
+}
+
+interface ReferenceListItem {
+  source: string;
+  sourceLine: number;
+  sourceCol: number;
+  /** The PDF snippet captured in the link (legacy; kept for tooltip). */
+  snippet: string;
+  /** The markdown line around the @pdf[[…]] token — shown as the primary text. */
+  contextLine?: string;
 }
 
 interface PageState {
@@ -36,7 +42,11 @@ interface PageState {
   textLayer: HTMLDivElement;
   highlightLayer: HTMLDivElement;
   rendered: boolean;
-  textRects: any[] | null; // PdfTextRectObject[]
+  textRects: any[] | null;
+}
+
+function anchorKey(a: PdfAnchor): string {
+  return `p=${a.page}&i=${a.textItemIndex}&o=${a.charOffset}&l=${a.length}`;
 }
 
 class PdfViewer {
@@ -45,7 +55,7 @@ class PdfViewer {
   private scale = 1.5;
   private container: HTMLElement;
   private pageContainer: HTMLElement;
-  private annotations: Annotation[] = [];
+  private highlights: HighlightSpec[] = [];
 
   constructor() {
     this.container = document.getElementById('viewer-container')!;
@@ -68,9 +78,15 @@ class PdfViewer {
         case 'goToAnchor':
           this.goToAnchor(msg.anchor);
           break;
-        case 'highlightAnnotations':
-          this.annotations = msg.annotations;
+        case 'setHighlights':
+          this.highlights = [
+            ...msg.referenced.map((h: any) => ({ anchor: h.anchor, kind: 'referenced' as const })),
+            ...msg.annotated.map((h: any) => ({ anchor: h.anchor, kind: 'annotated' as const, color: h.color })),
+          ];
           this.redrawAllHighlights();
+          break;
+        case 'referencesForAnchor':
+          this.showReferencePopover(msg.anchor, msg.items);
           break;
         case 'setTheme':
           document.body.dataset.theme = msg.theme;
@@ -118,20 +134,15 @@ class PdfViewer {
     if (!pageState?.textRects) return null;
 
     const items = pageState.textRects;
-
-    // Build full page text and find the selection within it
     let fullText = '';
     const itemOffsets: { start: number; end: number }[] = [];
-
     for (const item of items) {
       const start = fullText.length;
       fullText += item.content;
       itemOffsets.push({ start, end: fullText.length });
     }
-
     const selIdx = fullText.indexOf(selectedText);
     if (selIdx === -1) return null;
-
     for (let i = 0; i < itemOffsets.length; i++) {
       if (selIdx >= itemOffsets[i].start && selIdx < itemOffsets[i].end) {
         return {
@@ -158,7 +169,7 @@ class PdfViewer {
 
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'Copy Link';
-    copyBtn.title = 'Copy PDF link to clipboard';
+    copyBtn.title = 'Copy PDF link to clipboard (also creates a highlight)';
     copyBtn.addEventListener('click', () => {
       vscode.postMessage({ type: 'copyLinkToClipboard', anchor });
       toolbar.remove();
@@ -188,14 +199,12 @@ class PdfViewer {
   private async loadPdf(base64Data: string): Promise<void> {
     const binaryStr = atob(base64Data);
     const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i);
-    }
+    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
 
     try {
-      pdfDoc = await engine.openDocumentBuffer(
-        { id: 'doc-' + Date.now(), content: bytes.buffer },
-      ).toPromise();
+      pdfDoc = await engine
+        .openDocumentBuffer({ id: 'doc-' + Date.now(), content: bytes.buffer })
+        .toPromise();
       this.updatePageInfo();
       await this.renderAllVisiblePages();
       await this.extractAndSendOutline();
@@ -207,15 +216,25 @@ class PdfViewer {
 
   private async extractAndSendOutline(): Promise<void> {
     if (!pdfDoc) return;
+    let bookmarkItems: any[] = [];
     try {
       const bookmarksObj = await engine.getBookmarks(pdfDoc).toPromise();
-      if (!bookmarksObj?.bookmarks?.length) return;
-
-      const items = this.convertBookmarks(bookmarksObj.bookmarks);
-      vscode.postMessage({ type: 'outline', items });
+      const raw = bookmarksObj?.bookmarks ?? [];
+      bookmarkItems = raw.length ? this.convertBookmarks(raw) : [];
+      console.log(`[PaperLink] PDF outline: ${raw.length} top-level bookmarks`);
     } catch (e) {
-      console.error('Failed to extract outline:', e);
+      console.error('[PaperLink] getBookmarks failed:', e);
     }
+    if (bookmarkItems.length === 0) {
+      // Fall back to a flat page list so the Outline panel is always useful.
+      const total: number = pdfDoc.pageCount || 0;
+      bookmarkItems = [];
+      for (let i = 1; i <= total; i++) {
+        bookmarkItems.push({ title: `Page ${i}`, page: i, children: [] });
+      }
+      console.log(`[PaperLink] No embedded bookmarks; synthesized ${total} page entries.`);
+    }
+    vscode.postMessage({ type: 'outline', items: bookmarkItems });
   }
 
   private convertBookmarks(bookmarks: any[]): any[] {
@@ -223,8 +242,12 @@ class PdfViewer {
       let page = 1;
       if (bm.target) {
         if (bm.target.type === 'destination' && bm.target.destination) {
-          page = bm.target.destination.pageIndex + 1; // 0-indexed → 1-indexed
-        } else if (bm.target.type === 'action' && bm.target.action?.type === 1 /* Goto */ && bm.target.action.destination) {
+          page = bm.target.destination.pageIndex + 1;
+        } else if (
+          bm.target.type === 'action' &&
+          bm.target.action?.type === 1 /* Goto */ &&
+          bm.target.action.destination
+        ) {
           page = bm.target.action.destination.pageIndex + 1;
         }
       }
@@ -278,26 +301,20 @@ class PdfViewer {
       });
     }
 
-    // Use IntersectionObserver for lazy rendering
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
             const pageId = parseInt(entry.target.id.replace('page-', ''), 10);
-            if (pageId && !this.pages.get(pageId)?.rendered) {
-              this.renderPage(pageId);
-            }
+            if (pageId && !this.pages.get(pageId)?.rendered) this.renderPage(pageId);
           }
         }
       },
-      { root: this.container, rootMargin: '200px' }
+      { root: this.container, rootMargin: '200px' },
     );
-
     for (const [, page] of this.pages) {
       observer.observe(page.canvas.parentElement!);
     }
-
-    // Render first page immediately
     await this.renderPage(1);
   }
 
@@ -311,14 +328,10 @@ class PdfViewer {
     const dpr = window.devicePixelRatio || 1;
 
     try {
-      // Render page as image blob
-      const blob: Blob = await engine.renderPage(pdfDoc, pageObj, {
-        scaleFactor: this.scale,
-        dpr,
-        withAnnotations: true,
-      }).toPromise();
+      const blob: Blob = await engine
+        .renderPage(pdfDoc, pageObj, { scaleFactor: this.scale, dpr, withAnnotations: true })
+        .toPromise();
 
-      // Draw blob onto canvas
       const url = URL.createObjectURL(blob);
       const img = new Image();
       await new Promise<void>((resolve, reject) => {
@@ -337,16 +350,12 @@ class PdfViewer {
         img.src = url;
       });
 
-      // Build text layer from PDFium's precise text rects
       const textRects: any[] = await engine.getPageTextRects(pdfDoc, pageObj).toPromise();
       pageState.textRects = textRects;
       pageState.textLayer.innerHTML = '';
-
       for (const item of textRects) {
         const span = document.createElement('span');
         span.textContent = item.content;
-        // PDFium getPageTextRects returns device coordinates (top-left origin)
-        // Just scale to CSS pixels — no Y-flip needed
         const left = item.rect.origin.x * this.scale;
         const top = item.rect.origin.y * this.scale;
         const width = item.rect.size.width * this.scale;
@@ -360,7 +369,6 @@ class PdfViewer {
         pageState.textLayer.appendChild(span);
       }
 
-      // Draw annotation highlights
       this.drawHighlightsForPage(pageNum);
     } catch (e) {
       console.error(`Failed to render page ${pageNum}:`, e);
@@ -372,43 +380,59 @@ class PdfViewer {
     if (!pageState?.textRects) return;
 
     pageState.highlightLayer.innerHTML = '';
-
-    const pageAnnotations = this.annotations.filter((a) => a.anchor.page === pageNum);
-    if (pageAnnotations.length === 0) return;
-
     const items = pageState.textRects;
 
-    for (const annotation of pageAnnotations) {
-      const { anchor } = annotation;
-      let charCount = 0;
+    for (const h of this.highlights) {
+      const anchor = h.anchor;
+      if (anchor.page !== pageNum) continue;
 
+      let charCount = 0;
       for (let i = anchor.textItemIndex; i < items.length && charCount < anchor.length; i++) {
         const item = items[i];
+        const total = item.content.length;
+        if (total === 0) continue;
         const startChar = i === anchor.textItemIndex ? anchor.charOffset : 0;
-        const availableChars = item.content.length - startChar;
+        const availableChars = total - startChar;
         const charsToHighlight = Math.min(availableChars, anchor.length - charCount);
+        if (charsToHighlight <= 0) continue;
 
-        if (charsToHighlight > 0) {
-          const highlightEl = document.createElement('div');
-          highlightEl.className = 'annotation-highlight';
-          highlightEl.style.backgroundColor = annotation.color || 'rgba(255, 230, 0, 0.3)';
-          // Device coordinates — no Y-flip needed
-          const left = item.rect.origin.x * this.scale;
-          const top = item.rect.origin.y * this.scale;
-          highlightEl.style.left = `${left}px`;
-          highlightEl.style.top = `${top}px`;
-          highlightEl.style.width = `${item.rect.size.width * this.scale}px`;
-          highlightEl.style.height = `${item.rect.size.height * this.scale}px`;
-          highlightEl.title = `Note: ${annotation.markdownFile}`;
-          highlightEl.dataset.annotationId = annotation.id;
+        // Slice the text-item's bounding rect proportionally by character range
+        // so a partial-line selection only highlights the selected glyphs.
+        const fullLeft = item.rect.origin.x * this.scale;
+        const fullTop = item.rect.origin.y * this.scale;
+        const fullWidth = item.rect.size.width * this.scale;
+        const fullHeight = item.rect.size.height * this.scale;
+        const perChar = fullWidth / total;
+        const sliceLeft = fullLeft + perChar * startChar;
+        const sliceWidth = perChar * charsToHighlight;
 
-          highlightEl.addEventListener('click', () => {
-            vscode.postMessage({ type: 'annotationClicked', annotationId: annotation.id });
-          });
-
-          pageState.highlightLayer.appendChild(highlightEl);
-          charCount += charsToHighlight;
+        const hl = document.createElement('div');
+        hl.className = `annotation-highlight ${h.kind}`;
+        if (h.color && h.kind === 'annotated') {
+          hl.style.backgroundColor = h.color;
         }
+        hl.style.left = `${sliceLeft}px`;
+        hl.style.top = `${fullTop}px`;
+        hl.style.width = `${sliceWidth}px`;
+        hl.style.height = `${fullHeight}px`;
+        hl.title =
+          h.kind === 'referenced'
+            ? `Click to see markdown notes referencing this`
+            : 'Highlight';
+        hl.dataset.anchorKey = anchorKey(anchor);
+
+        hl.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (h.kind === 'referenced') {
+            // Ask the host for references, and remember where to anchor the popover.
+            this.pendingPopoverAnchor = anchor;
+            this.pendingPopoverElement = hl;
+            vscode.postMessage({ type: 'requestReferencesForAnchor', anchor });
+          }
+        });
+
+        pageState.highlightLayer.appendChild(hl);
+        charCount += charsToHighlight;
       }
     }
   }
@@ -416,11 +440,143 @@ class PdfViewer {
   private redrawAllHighlights(): void {
     if (!pdfDoc) return;
     for (const [pageNum, pageState] of this.pages) {
-      if (pageState.rendered) {
-        this.drawHighlightsForPage(pageNum);
-      }
+      if (pageState.rendered) this.drawHighlightsForPage(pageNum);
     }
   }
+
+  // ─── Popover (references) ─────────────────────────────────────────────────
+
+  private pendingPopoverAnchor: PdfAnchor | null = null;
+  private pendingPopoverElement: HTMLElement | null = null;
+
+  private showReferencePopover(anchor: PdfAnchor, items: ReferenceListItem[]): void {
+    this.dismissPopover();
+
+    if (!this.pendingPopoverElement) return;
+    // If a different click raced in, ignore.
+    if (
+      !this.pendingPopoverAnchor ||
+      anchorKey(this.pendingPopoverAnchor) !== anchorKey(anchor)
+    ) {
+      return;
+    }
+
+    const host = document.createElement('div');
+    host.className = 'ref-popover';
+    host.setAttribute('role', 'menu');
+    host.id = 'ref-popover';
+
+    const header = document.createElement('div');
+    header.className = 'ref-header';
+    header.textContent = items.length > 0
+      ? `${items.length} markdown note${items.length === 1 ? '' : 's'} reference this`
+      : 'No markdown notes reference this';
+    host.appendChild(header);
+
+    if (items.length === 0) {
+      const e = document.createElement('div');
+      e.className = 'ref-empty';
+      e.textContent = 'Create a reference by pasting the copied PDF link into a .md file.';
+      host.appendChild(e);
+    } else {
+      for (const it of items) {
+        const row = document.createElement('div');
+        row.className = 'ref-item';
+        row.setAttribute('role', 'menuitem');
+        row.tabIndex = 0;
+
+        // Primary: markdown context line (the text around the @pdf[[…]] token).
+        // Falls back to the PDF snippet if the context couldn't be read.
+        const primary = document.createElement('div');
+        primary.className = 'ref-context';
+        primary.textContent = it.contextLine && it.contextLine.length > 0
+          ? it.contextLine
+          : (it.snippet ? `"${it.snippet}"` : '(empty line)');
+        row.appendChild(primary);
+
+        // Secondary: file path + line:col location.
+        const meta = document.createElement('div');
+        meta.className = 'ref-meta';
+        const p = document.createElement('span');
+        p.className = 'ref-path';
+        p.textContent = it.source;
+        const loc = document.createElement('span');
+        loc.className = 'ref-loc';
+        loc.textContent = `L${it.sourceLine + 1}:${it.sourceCol + 1}`;
+        meta.appendChild(p);
+        meta.appendChild(loc);
+        row.appendChild(meta);
+
+        // Tooltip keeps the raw PDF snippet available on hover.
+        if (it.snippet) row.title = `PDF snippet: "${it.snippet}"`;
+
+        row.addEventListener('click', () => {
+          vscode.postMessage({
+            type: 'openMarkdownAtLocation',
+            path: it.source,
+            line: it.sourceLine,
+            col: it.sourceCol,
+          });
+          this.dismissPopover();
+        });
+        row.addEventListener('keydown', (ev: KeyboardEvent) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            (ev.currentTarget as HTMLElement).click();
+          }
+        });
+        host.appendChild(row);
+      }
+    }
+
+    document.body.appendChild(host);
+
+    // Position below the highlight, clamp to viewport.
+    const rect = this.pendingPopoverElement.getBoundingClientRect();
+    const margin = 4;
+    let top = rect.bottom + margin + window.scrollY;
+    let left = rect.left + window.scrollX;
+    // After layout pass, adjust for viewport.
+    requestAnimationFrame(() => {
+      const hrect = host.getBoundingClientRect();
+      if (hrect.bottom > window.innerHeight - 10) {
+        // Flip above
+        top = rect.top - hrect.height - margin + window.scrollY;
+      }
+      if (hrect.right > window.innerWidth - 10) {
+        left = window.innerWidth - hrect.width - 10 + window.scrollX;
+      }
+      host.style.top = `${top}px`;
+      host.style.left = `${left}px`;
+    });
+    host.style.top = `${top}px`;
+    host.style.left = `${left}px`;
+
+    // Dismiss on outside click / Escape
+    const onDown = (e: MouseEvent) => {
+      if (!host.contains(e.target as Node)) this.dismissPopover();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') this.dismissPopover();
+    };
+    setTimeout(() => {
+      document.addEventListener('mousedown', onDown);
+      document.addEventListener('keydown', onKey);
+    }, 0);
+    this.popoverCleanup = () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }
+
+  private popoverCleanup: (() => void) | null = null;
+
+  private dismissPopover(): void {
+    document.getElementById('ref-popover')?.remove();
+    this.popoverCleanup?.();
+    this.popoverCleanup = null;
+  }
+
+  // ─── Navigation ────────────────────────────────────────────────────────────
 
   async goToAnchor(anchor: PdfAnchor): Promise<void> {
     const pageEl = document.getElementById(`page-${anchor.page}`);
@@ -429,23 +585,19 @@ class PdfViewer {
       this.currentPage = anchor.page;
       this.updatePageInfo();
 
-      if (!this.pages.get(anchor.page)?.rendered) {
-        await this.renderPage(anchor.page);
-      }
+      if (!this.pages.get(anchor.page)?.rendered) await this.renderPage(anchor.page);
 
       if (anchor.length > 0) {
-        const tempAnnotation: Annotation = {
-          id: '__temp__',
+        // Transient blue flash to indicate the target.
+        const ghost: HighlightSpec = {
           anchor,
-          markdownFile: '',
+          kind: 'annotated',
           color: 'rgba(0, 150, 255, 0.4)',
-          createdAt: new Date().toISOString(),
         };
-        this.annotations.push(tempAnnotation);
+        this.highlights.push(ghost);
         this.redrawAllHighlights();
-
         setTimeout(() => {
-          this.annotations = this.annotations.filter((a) => a.id !== '__temp__');
+          this.highlights = this.highlights.filter(h => h !== ghost);
           this.redrawAllHighlights();
         }, 2000);
       }
@@ -511,7 +663,6 @@ class PdfViewer {
     console.error('__pdfiumWasmUrl not set');
     return;
   }
-
   try {
     const eng = await createPdfiumEngine(wasmUrl);
     (window as any).__initPdfViewer(eng);
