@@ -1,14 +1,111 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { PdfEditorProvider } from './pdfEditorProvider';
 import { PdfLinkProvider } from './pdfLinkProvider';
-import { AnnotationService } from './annotationService';
 import { PdfOutlineProvider } from './pdfOutlineProvider';
+import { IndexService } from './index/indexService';
+import { MarkdownIndexer } from './index/markdownIndexer';
+import { FileRenameWatcher } from './index/fileRenameWatcher';
+import { BacklinksProvider } from './backlinksProvider';
+import { MarkdownEditorProvider } from './markdownEditorProvider';
 import { activateMarkdownItPlugin } from './markdownPlugin';
+import { getGitRoot } from './util/gitRoot';
+import { log } from './util/logger';
+import { ReferenceEntry, stringToAnchor } from './shared/types';
 
-export function activate(context: vscode.ExtensionContext): { extendMarkdownIt: (md: any) => any } {
-  const annotationService = new AnnotationService();
+export async function activate(
+  context: vscode.ExtensionContext,
+): Promise<{ extendMarkdownIt: (md: any) => any }> {
+  const gitRoot = getGitRoot();
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const projectRoot = gitRoot ?? workspaceRoot;
+  const indexService = new IndexService();
 
-  // Register PDF outline tree view
+  if (projectRoot) {
+    try {
+      await indexService.init(projectRoot);
+    } catch (e) {
+      log.error('IndexService init failed', e);
+    }
+
+    const indexer = new MarkdownIndexer(indexService, projectRoot);
+    // Kick off the full scan in the background — don't block activation.
+    indexer.init().catch(e => log.error('MarkdownIndexer.init failed', e));
+    context.subscriptions.push(indexer);
+
+    const renameWatcher = new FileRenameWatcher(indexService, projectRoot);
+    context.subscriptions.push(renameWatcher);
+
+    // Backlinks + forward-links views in Explorer.
+    const backlinks = new BacklinksProvider(indexService, projectRoot, 'backlinks');
+    const backlinksView = vscode.window.createTreeView('paperlink.backlinks', {
+      treeDataProvider: backlinks,
+      showCollapseAll: false,
+    });
+    const forwardLinks = new BacklinksProvider(indexService, projectRoot, 'forward');
+    const forwardLinksView = vscode.window.createTreeView('paperlink.forwardLinks', {
+      treeDataProvider: forwardLinks,
+      showCollapseAll: false,
+    });
+    context.subscriptions.push(backlinksView, forwardLinksView);
+
+    context.subscriptions.push({
+      dispose: () => { void indexService.dispose(); },
+    });
+
+    // Register extension-host-wide commands that need the indexer.
+    context.subscriptions.push(
+      vscode.commands.registerCommand('paperlink.refreshIndex', async () => {
+        await indexer.refresh();
+        vscode.window.showInformationMessage('PaperLink: index rebuilt');
+      }),
+      vscode.commands.registerCommand(
+        'paperlink.openBacklink',
+        async (ref: ReferenceEntry) => {
+          if (!ref) return;
+          const absPath = path.join(projectRoot, ref.source);
+          const mdUri = vscode.Uri.file(absPath);
+          const doc = await vscode.workspace.openTextDocument(mdUri);
+          const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.Active);
+          const pos = new vscode.Position(
+            Math.max(0, ref.sourceLine | 0),
+            Math.max(0, ref.sourceCol | 0),
+          );
+          editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+          editor.selection = new vscode.Selection(pos, pos);
+        },
+      ),
+      vscode.commands.registerCommand(
+        'paperlink.openMarkdownAtLocation',
+        async (args: { path: string; line: number; col: number }) => {
+          if (!args?.path) return;
+          const abs = path.join(projectRoot, args.path);
+          const mdUri = vscode.Uri.file(abs);
+          const doc = await vscode.workspace.openTextDocument(mdUri);
+          const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+          const pos = new vscode.Position(
+            Math.max(0, args.line | 0),
+            Math.max(0, args.col | 0),
+          );
+          editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+          editor.selection = new vscode.Selection(pos, pos);
+        },
+      ),
+      vscode.commands.registerCommand('paperlink.openInMarkdownEditor', async (uri?: vscode.Uri) => {
+        const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+        if (!target) return;
+        await vscode.commands.executeCommand(
+          'vscode.openWith',
+          target,
+          MarkdownEditorProvider.viewType,
+        );
+      }),
+    );
+  } else {
+    log.warn('No workspace folder; PaperLink will run in read-only mode.');
+  }
+
+  // PDF outline tree view (always registered; hidden via `when` context key).
   const outlineProvider = new PdfOutlineProvider();
   const outlineTreeView = vscode.window.createTreeView('paperlink.outline', {
     treeDataProvider: outlineProvider,
@@ -16,68 +113,99 @@ export function activate(context: vscode.ExtensionContext): { extendMarkdownIt: 
   });
   context.subscriptions.push(outlineTreeView);
 
-  // Register PDF custom editor
-  const pdfProvider = new PdfEditorProvider(context, annotationService, outlineProvider);
+  // PDF custom editor
+  const pdfProvider = new PdfEditorProvider(
+    context,
+    indexService,
+    outlineProvider,
+    projectRoot ?? process.cwd(),
+  );
   context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider(
-      'paperlink.pdfViewer',
-      pdfProvider,
-      {
-        webviewOptions: { retainContextWhenHidden: true },
-        supportsMultipleEditorsPerDocument: false,
-      }
-    )
+    vscode.window.registerCustomEditorProvider('paperlink.pdfViewer', pdfProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+      supportsMultipleEditorsPerDocument: false,
+    }),
   );
 
-  // Register document link provider for markdown files
+  // Markdown editor scaffold (priority "option" — never default).
+  const mdEditorProvider = new MarkdownEditorProvider(context);
+  context.subscriptions.push(
+    vscode.window.registerCustomEditorProvider(
+      MarkdownEditorProvider.viewType,
+      mdEditorProvider,
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ),
+  );
+
+  // Markdown → DocumentLink provider
   const linkProvider = new PdfLinkProvider();
   context.subscriptions.push(
     vscode.languages.registerDocumentLinkProvider(
       { language: 'markdown', scheme: 'file' },
-      linkProvider
-    )
+      linkProvider,
+    ),
   );
 
-  // Register commands
+  // Legacy PDF-outline + show-annotations commands
   context.subscriptions.push(
     vscode.commands.registerCommand('paperlink.openPdfAtAnchor', async (args: any) => {
       const { pdfPath, anchor } = typeof args === 'string' ? JSON.parse(args) : args;
       await pdfProvider.openPdfAtAnchor(pdfPath, anchor);
-    })
-  );
-
-  context.subscriptions.push(
+    }),
     vscode.commands.registerCommand('paperlink.outlineGoToPage', (page: number) => {
       outlineProvider.goToPage(page);
-    })
-  );
-
-  context.subscriptions.push(
+    }),
     vscode.commands.registerCommand('paperlink.showAnnotations', async () => {
-      const activeWebview = pdfProvider.getActiveWebview();
-      if (activeWebview) {
-        const annotations = await annotationService.getAnnotationsForPdf(activeWebview.pdfUri);
-        const items = annotations.map((a) => ({
-          label: a.anchor.snippet.substring(0, 80),
-          description: `p.${a.anchor.page} -> ${a.markdownFile}`,
-          annotation: a,
-        }));
-        const picked = await vscode.window.showQuickPick(items, {
-          placeHolder: 'Select an annotation to jump to',
-        });
-        if (picked) {
-          activeWebview.goToAnchor(picked.annotation.anchor);
-        }
+      const active = pdfProvider.getActiveWebview();
+      if (!active) return;
+      const pdfRel = projectRoot
+        ? path.relative(projectRoot, active.pdfUri.fsPath).replace(/\\/g, '/')
+        : path.basename(active.pdfUri.fsPath);
+      const anns = indexService.getAnnotationsForPdf(pdfRel);
+      const items = anns.map(a => ({
+        label: (a.snippet || a.anchor).substring(0, 80),
+        description: `p.${a.page}`,
+        anchor: a.anchor,
+      }));
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: 'Select an annotation to jump to',
+      });
+      if (picked) {
+        const parsed = stringToAnchor(picked.anchor);
+        if (parsed) active.goToAnchor(parsed);
       }
-    })
+    }),
   );
 
-  // Return the markdown-it plugin for markdown preview
+  // PDF navigation/zoom commands (editor/title bar buttons)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('paperlink.prevPage', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'navigate', direction: 'prev' });
+    }),
+    vscode.commands.registerCommand('paperlink.nextPage', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'navigate', direction: 'next' });
+    }),
+    vscode.commands.registerCommand('paperlink.zoomIn', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'zoom', delta: 0.25 });
+    }),
+    vscode.commands.registerCommand('paperlink.zoomOut', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'zoom', delta: -0.25 });
+    }),
+    vscode.commands.registerCommand('paperlink.zoomFitWidth', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'zoomFitWidth' });
+    }),
+  );
+
   return {
     extendMarkdownIt: activateMarkdownItPlugin,
   };
 }
 
 export function deactivate(): void {
-  // Clean up
+  log.dispose();
 }

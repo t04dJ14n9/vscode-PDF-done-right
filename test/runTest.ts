@@ -6,6 +6,7 @@ import { runTests } from '@vscode/test-electron';
 
 async function main() {
   try {
+    // __dirname after compile with new tsconfig: <repo>/out/test
     const extensionDevelopmentPath = path.resolve(__dirname, '../../');
     const extensionTestsPath = path.resolve(__dirname, './suite/index');
     const testWorkspace = path.resolve(__dirname, '../../test-workspace');

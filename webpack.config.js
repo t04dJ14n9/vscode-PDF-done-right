@@ -54,18 +54,19 @@ const configs = [
           exclude: /node_modules/,
           use: [{ loader: 'ts-loader', options: { configFile: 'tsconfig.webview.json' } }],
         },
+        {
+          test: /\.wasm$/,
+          type: 'asset/resource',
+          generator: { emit: false },
+        },
       ],
     },
     plugins: [
       new CopyPlugin({
         patterns: [
           {
-            from: 'node_modules/pdfjs-dist/build/pdf.mjs',
-            to: 'pdf.mjs',
-          },
-          {
-            from: 'node_modules/pdfjs-dist/build/pdf.worker.mjs',
-            to: 'pdf.worker.mjs',
+            from: 'node_modules/@embedpdf/pdfium/dist/pdfium.wasm',
+            to: 'pdfium.wasm',
           },
         ],
       }),
@@ -81,6 +82,30 @@ const configs = [
     output: {
       path: path.resolve(__dirname, 'dist'),
       filename: 'markdown-preview.js',
+    },
+    resolve: {
+      extensions: ['.ts', '.js'],
+    },
+    module: {
+      rules: [
+        {
+          test: /\.ts$/,
+          exclude: /node_modules/,
+          use: [{ loader: 'ts-loader', options: { configFile: 'tsconfig.webview.json' } }],
+        },
+      ],
+    },
+    devtool: 'nosources-source-map',
+  },
+  // Markdown editor scaffold webview (browser)
+  {
+    name: 'markdown-editor',
+    target: 'web',
+    mode: 'none',
+    entry: './webview-src/markdown-editor.ts',
+    output: {
+      path: path.resolve(__dirname, 'dist'),
+      filename: 'markdown-editor.js',
     },
     resolve: {
       extensions: ['.ts', '.js'],

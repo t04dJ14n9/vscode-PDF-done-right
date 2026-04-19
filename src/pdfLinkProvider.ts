@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { PDF_LINK_REGEX, stringToAnchor } from './shared/types';
 
 /**

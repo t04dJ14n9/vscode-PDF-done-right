@@ -35,27 +35,6 @@ export function stringToAnchor(s: string): PdfAnchor | null {
   return { page, textItemIndex, charOffset, length, snippet: params.get('snippet') || '' };
 }
 
-/** An annotation linking a PDF anchor to a markdown location */
-export interface Annotation {
-  id: string;
-  anchor: PdfAnchor;
-  /** Relative path to the markdown file from workspace root */
-  markdownFile: string;
-  /** Optional block ID or heading in the markdown file */
-  blockRef?: string;
-  /** Color for the highlight */
-  color: string;
-  /** When the annotation was created */
-  createdAt: string;
-}
-
-/** Sidecar file stored as {pdfname}.paperlink.json */
-export interface AnnotationStore {
-  version: 1;
-  pdfFile: string;
-  annotations: Annotation[];
-}
-
 /** The link syntax used in markdown: @pdf[[path/to/file.pdf#anchor|"snippet"]] */
 export const PDF_LINK_REGEX = /@pdf\[\[([^\]#]+)#([^\]|]+)(?:\|"([^"]*)")?\]\]/g;
 
@@ -67,14 +46,111 @@ export function formatPdfLink(relativePath: string, anchor: PdfAnchor): string {
   return `@pdf[[${relativePath}#${anchorToString(anchor)}|"${snippet}"]]`;
 }
 
-// Messages between extension host and webview
+// ─── JSON index ─────────────────────────────────────────────────────────────
+
+/**
+ * A user-authored highlight on a PDF passage.
+ * Stored in index.json; may or may not have any markdown references pointing at it.
+ */
+export interface AnnotationEntry {
+  /** POSIX-relative path (from gitRoot) to the PDF */
+  pdf: string;
+  /** 1-based page */
+  page: number;
+  /** Serialized PdfAnchor ("page=…&idx=…&off=…&len=…") */
+  anchor: string;
+  /** Display text captured when the annotation was created */
+  snippet: string;
+  /** Highlight color (CSS) */
+  color: string;
+  /** ISO creation timestamp */
+  createdAt: string;
+}
+
+/**
+ * A parsed `@pdf[[…]]` occurrence inside a markdown file.
+ * Purely derived from scanning the .md — rebuilt on every save.
+ */
+export interface ReferenceEntry {
+  /** POSIX-relative path of the .md file */
+  source: string;
+  /** 0-based line number in the .md */
+  sourceLine: number;
+  /** 0-based column number where the @pdf[[ starts */
+  sourceCol: number;
+  /** Length (in characters) of the entire @pdf[[...]] token */
+  sourceLength: number;
+  /** POSIX-relative PDF path from gitRoot */
+  pdf: string;
+  /** 1-based page (from anchor) */
+  page: number;
+  /** Serialized anchor string */
+  anchor: string;
+  /** Display snippet (from the link's `|"..."` suffix, if any) */
+  snippet: string;
+}
+
+/** On-disk JSON schema: .paperlink/index.json */
+export interface IndexFile {
+  version: 2;
+  annotations: AnnotationEntry[];
+  references: ReferenceEntry[];
+}
+
+/** Item shown in the reference popover / backlinks panel */
+export interface ReferenceListItem {
+  source: string;       // path rel to gitRoot
+  sourceLine: number;   // 0-based
+  sourceCol: number;
+  /** Legacy snippet from the @pdf[[…|"…"]] suffix (the PDF text). */
+  snippet: string;
+  /** The markdown source line the reference lives on, trimmed. */
+  contextLine?: string;
+}
+
+// ─── Legacy sidecar (kept only for one-shot migration) ──────────────────────
+
+export interface LegacyAnnotation {
+  id: string;
+  anchor: PdfAnchor;
+  markdownFile: string;
+  blockRef?: string;
+  color: string;
+  createdAt: string;
+}
+
+export interface LegacyAnnotationStore {
+  version: 1;
+  pdfFile: string;
+  annotations: LegacyAnnotation[];
+}
+
+// ─── Messages ───────────────────────────────────────────────────────────────
+
 export type ExtensionToWebviewMessage =
   | { type: 'loadPdf'; data: string } // base64 encoded PDF
   | { type: 'goToAnchor'; anchor: PdfAnchor }
-  | { type: 'highlightAnnotations'; annotations: Annotation[] }
-  | { type: 'setTheme'; theme: 'light' | 'dark' };
+  /**
+   * Tell the webview which passages have highlights.
+   * `annotated` anchors were authored by the user; `referenced` anchors have
+   * at least one markdown note pointing at them.
+   */
+  | {
+      type: 'setHighlights';
+      annotated: { anchor: PdfAnchor; color: string }[];
+      referenced: { anchor: PdfAnchor }[];
+    }
+  | {
+      type: 'referencesForAnchor';
+      anchor: PdfAnchor;
+      items: ReferenceListItem[];
+    }
+  | { type: 'setTheme'; theme: 'light' | 'dark' }
+  | { type: 'navigate'; direction: 'prev' | 'next' }
+  | { type: 'zoom'; delta: number }
+  | { type: 'zoomFitWidth' };
 
-/** Outline item from PDF.js getOutline() */
+/** Outline item from PDFium's getBookmarks() */
 export interface PdfOutlineItem {
   title: string;
   page: number;
@@ -84,8 +160,15 @@ export interface PdfOutlineItem {
 export type WebviewToExtensionMessage =
   | { type: 'ready' }
   | { type: 'selectionMade'; anchor: PdfAnchor }
-  | { type: 'annotationClicked'; annotationId: string }
-  | { type: 'pageChanged'; page: number }
+  | { type: 'pageChanged'; page: number; totalPages: number }
   | { type: 'requestInsertLink'; anchor: PdfAnchor }
   | { type: 'copyLinkToClipboard'; anchor: PdfAnchor }
+  | { type: 'requestReferencesForAnchor'; anchor: PdfAnchor }
+  | {
+      type: 'openMarkdownAtLocation';
+      path: string;
+      line: number;
+      col: number;
+    }
+  | { type: 'zoomChanged'; scale: number }
   | { type: 'outline'; items: PdfOutlineItem[] };

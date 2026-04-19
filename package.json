@@ -1,9 +1,9 @@
 {
-  "name": "paper-link",
-  "displayName": "PaperLink",
+  "name": "vscode-pdf-done-right",
+  "displayName": "vscode-PDF-done-right",
   "description": "Bidirectional links between PDF annotations and Markdown notes",
-  "version": "0.1.0",
-  "publisher": "paper-link",
+  "version": "0.2.0",
+  "publisher": "t04dj14n9",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -14,40 +14,116 @@
   ],
   "activationEvents": [
     "onLanguage:markdown",
-    "onCustomEditor:paperlink.pdfViewer"
+    "onCustomEditor:paperlink.pdfViewer",
+    "workspaceContains:**/*.pdf",
+    "workspaceContains:**/*.md"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "customEditors": [
       {
         "viewType": "paperlink.pdfViewer",
-        "displayName": "PaperLink PDF Viewer",
+        "displayName": "vscode-PDF-done-right PDF Viewer",
         "selector": [
           {
             "filenamePattern": "*.pdf"
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "paperlink.markdownEditor",
+        "displayName": "vscode-PDF-done-right Markdown Editor (preview)",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
       {
-        "command": "paperlink.createAnnotationLink",
-        "title": "PaperLink: Copy PDF Link to Clipboard"
-      },
-      {
-        "command": "paperlink.insertPdfLink",
-        "title": "PaperLink: Insert PDF Link at Cursor"
-      },
-      {
         "command": "paperlink.showAnnotations",
-        "title": "PaperLink: Show All Annotations for Current PDF"
+        "title": "vscode-PDF-done-right: Show All Annotations for Current PDF"
       },
       {
         "command": "paperlink.outlineGoToPage",
         "title": "Go to Page"
+      },
+      {
+        "command": "paperlink.refreshIndex",
+        "title": "vscode-PDF-done-right: Refresh Reference Index"
+      },
+      {
+        "command": "paperlink.openBacklink",
+        "title": "vscode-PDF-done-right: Open Backlink",
+        "enablement": "false"
+      },
+      {
+        "command": "paperlink.openMarkdownAtLocation",
+        "title": "vscode-PDF-done-right: Open Markdown At Location",
+        "enablement": "false"
+      },
+      {
+        "command": "paperlink.openInMarkdownEditor",
+        "title": "vscode-PDF-done-right: Open In Obsidian-style Editor (preview)"
+      },
+      {
+        "command": "paperlink.prevPage",
+        "title": "Previous Page",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "paperlink.nextPage",
+        "title": "Next Page",
+        "icon": "$(arrow-right)"
+      },
+      {
+        "command": "paperlink.zoomIn",
+        "title": "Zoom In",
+        "icon": "$(zoom-in)"
+      },
+      {
+        "command": "paperlink.zoomOut",
+        "title": "Zoom Out",
+        "icon": "$(zoom-out)"
+      },
+      {
+        "command": "paperlink.zoomFitWidth",
+        "title": "Fit Width",
+        "icon": "$(screen-normal)"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "paperlink.prevPage",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@1"
+        },
+        {
+          "command": "paperlink.nextPage",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@2"
+        },
+        {
+          "command": "paperlink.zoomOut",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@3"
+        },
+        {
+          "command": "paperlink.zoomIn",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@4"
+        },
+        {
+          "command": "paperlink.zoomFitWidth",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@5"
+        }
+      ]
+    },
     "views": {
       "explorer": [
         {
@@ -55,8 +131,28 @@
           "name": "PDF Outline",
           "when": "paperlink.pdfOpen",
           "icon": "$(book)"
+        },
+        {
+          "id": "paperlink.backlinks",
+          "name": "Backlinks",
+          "icon": "$(references)"
+        },
+        {
+          "id": "paperlink.forwardLinks",
+          "name": "Forward Links",
+          "icon": "$(link-external)"
         }
       ]
+    },
+    "configuration": {
+      "title": "vscode-PDF-done-right",
+      "properties": {
+        "paperlink.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Emit verbose debug output to the vscode-PDF-done-right output channel."
+        }
+      }
     },
     "markdown.markdownItPlugins": true,
     "markdown.previewScripts": [
@@ -75,15 +171,20 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
     "@vscode/test-electron": "^2.5.2",
     "copy-webpack-plugin": "^12.0.0",
     "mocha": "^11.7.5",
+    "playwright": "^1.59.1",
     "ts-loader": "^9.5.1",
     "typescript": "^5.3.0",
     "webpack": "^5.89.0",
-    "webpack-cli": "^5.1.4"
+    "webpack-cli": "^5.1.4",
+    "ws": "^8.20.0"
   },
   "dependencies": {
-    "pdfjs-dist": "^4.0.0"
+    "@embedpdf/engines": "^2.14.0",
+    "@embedpdf/models": "^2.14.0",
+    "@embedpdf/pdfium": "^2.14.0"
   }
 }
