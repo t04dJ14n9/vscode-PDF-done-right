@@ -162,13 +162,16 @@ export class IndexService {
 
   /** All references to this specific (pdf, anchor) passage. */
   getReferencesForAnchor(pdf: string, anchor: string): ReferenceEntry[] {
-    const k = `${toPosix(pdf)}|${anchor}`;
-    return this.byTargetAnchor.get(k) ?? [];
+    const target = toPosix(pdf);
+    return this.index.references.filter(
+      r => r.anchor === anchor && refMatchesTarget(r, target),
+    );
   }
 
   /** All references to any passage in this PDF. */
   getReferencesForPdf(pdf: string): ReferenceEntry[] {
-    return this.byTargetPdf.get(toPosix(pdf)) ?? [];
+    const target = toPosix(pdf);
+    return this.index.references.filter(r => refMatchesTarget(r, target));
   }
 
   /**
@@ -181,7 +184,7 @@ export class IndexService {
   getBacklinks(fileRel: string): ReferenceEntry[] {
     const p = toPosix(fileRel);
     if (p.toLowerCase().endsWith('.pdf')) {
-      return this.byTargetPdf.get(p) ?? [];
+      return this.index.references.filter(r => refMatchesTarget(r, p));
     }
     return [];
   }
@@ -375,9 +378,46 @@ function pushToMap<K, V>(m: Map<K, V[]>, k: K, v: V): void {
 }
 
 /**
+ * A reference matches a target PDF path if the reference's `pdf` field
+ * resolves to `target` when treated as either:
+ *   • gitRoot-relative (as authored), or
+ *   • relative to the markdown file's directory.
+ * Both interpretations are accepted so users can write short paths like
+ * `sample.pdf` next to their note, OR full gitRoot-relative paths.
+ */
+function refMatchesTarget(r: ReferenceEntry, target: string): boolean {
+  if (r.pdf === target) return true;
+  const dir = dirnamePosix(r.source);
+  if (dir && joinPosix(dir, r.pdf) === target) return true;
+  return false;
+}
+
+function dirnamePosix(p: string): string {
+  const i = p.lastIndexOf('/');
+  return i >= 0 ? p.slice(0, i) : '';
+}
+
+function joinPosix(dir: string, rel: string): string {
+  if (rel.startsWith('/')) rel = rel.slice(1);
+  const combined = dir ? `${dir}/${rel}` : rel;
+  const parts: string[] = [];
+  for (const seg of combined.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (parts.length) parts.pop(); continue; }
+    parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+/**
  * Parse a markdown file's text content into reference entries.
  * Exported so both `MarkdownIndexer` (on save) and the initial full scan can
  * share the exact same parse logic.
+ *
+ * We store the `pdf` path exactly as authored in the markdown (normalised to
+ * POSIX). The lookup side (IndexService.getReferencesFor*) performs flexible
+ * matching so links written relative to the note's directory *or* relative to
+ * gitRoot both resolve to the same PDF.
  */
 export function parseMarkdownReferences(
   sourceRelPosix: string,
@@ -395,11 +435,16 @@ export function parseMarkdownReferences(
 
   while ((match = regex.exec(text)) !== null) {
     const full = match[0];
-    const pdfRel = match[1];
+    const pdfRelLink = match[1];
     const anchorStr = match[2];
     const snippet = match[3] ?? '';
     const anchor = stringToAnchor(anchorStr) as PdfAnchor | null;
     if (!anchor) continue;
+
+    // Guard: if a link got pasted inside another link the outer regex may
+    // capture a nonsense path like "test-wo@pdf[[test-workspace/sample.pdf".
+    // Reject any pdf path that contains `@pdf[[`, newlines, or brackets.
+    if (/@pdf\[\[|[\n\r\[\]]/.test(pdfRelLink)) continue;
 
     const { line, col } = offsetToLineCol(match.index, lineOffsets);
     refs.push({
@@ -407,7 +452,7 @@ export function parseMarkdownReferences(
       sourceLine: line,
       sourceCol: col,
       sourceLength: full.length,
-      pdf: toPosix(pdfRel),
+      pdf: toPosix(pdfRelLink),
       page: anchor.page,
       anchor: anchorStr,
       snippet,

@@ -386,6 +386,20 @@ class PdfViewer {
       const anchor = h.anchor;
       if (anchor.page !== pageNum) continue;
 
+      // One group element per anchor, containing one child rect per text-item
+      // span. Mouse-enter anywhere in the group highlights all siblings.
+      const group = document.createElement('div');
+      group.className = `annotation-group ${h.kind}`;
+      group.dataset.anchorKey = anchorKey(anchor);
+      // Groups should be invisible themselves; clicks and hovers are handled
+      // per-rect but bubble up.
+      group.style.position = 'absolute';
+      group.style.left = '0';
+      group.style.top = '0';
+      group.style.right = '0';
+      group.style.bottom = '0';
+      group.style.pointerEvents = 'none';
+
       let charCount = 0;
       for (let i = anchor.textItemIndex; i < items.length && charCount < anchor.length; i++) {
         const item = items[i];
@@ -431,9 +445,30 @@ class PdfViewer {
           }
         });
 
-        pageState.highlightLayer.appendChild(hl);
+        // Coordinated hover: toggle `.hover-active` on every sibling rect
+        // belonging to the same anchor group, so the whole highlight lights up
+        // as a single unit instead of showing per-line outlines.
+        const key = anchorKey(anchor);
+        hl.addEventListener('mouseenter', () => {
+          for (const el of Array.from(
+            pageState.highlightLayer.querySelectorAll(`[data-anchor-key="${CSS.escape(key)}"]`),
+          )) {
+            (el as HTMLElement).classList.add('hover-active');
+          }
+        });
+        hl.addEventListener('mouseleave', () => {
+          for (const el of Array.from(
+            pageState.highlightLayer.querySelectorAll(`[data-anchor-key="${CSS.escape(key)}"]`),
+          )) {
+            (el as HTMLElement).classList.remove('hover-active');
+          }
+        });
+
+        group.appendChild(hl);
         charCount += charsToHighlight;
       }
+
+      pageState.highlightLayer.appendChild(group);
     }
   }
 

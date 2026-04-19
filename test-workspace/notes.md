@@ -11,6 +11,8 @@ Background on @pdf[[sample.pdf#page=1&idx=2&off=0&len=12|"Ashish Vaswani"]] and 
 - [ ] Read section on multi-head attention
 - [ ] Compare with BERT architecture
 
+@pdf[[test-workspace/sample.pdf#page=3&idx=1&off=0&len=147|"On the WMT 2014 English-to-German translation task, the b..."]]
+
 @pdf[[test-workspace/sample.pdf#page=1&idx=4&off=17&len=91|"neural networks. We propose a new simple network architec..."]]
 
 @pdf[[test-workspace/sample.pdf#page=2&idx=5&off=15&len=30|"nction can be described as map"]]

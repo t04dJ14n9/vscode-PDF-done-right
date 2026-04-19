@@ -267,7 +267,26 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
       await vscode.env.clipboard.writeText(link);
       return;
     }
-    await editor.edit(b => b.insert(editor.selection.active, link));
+
+    // Ensure we never paste inside an existing @pdf[[…]] token, which would
+    // corrupt both links. Find the safest anchor position near the current
+    // cursor: if the cursor sits inside a token, jump to just after its ]].
+    // Also make sure the insertion is on its own line (newline before/after
+    // when needed) so the token stays on one line.
+    const doc = editor.document;
+    const safePos = pickSafeInsertPosition(doc, editor.selection.active);
+
+    // Decide prefix/suffix so the link sits on its own line:
+    //   • If the char immediately before isn't a line break, prepend \n\n.
+    //   • If the char immediately after isn't a line break / EOF, append \n.
+    const before = safePos.character > 0
+      ? doc.lineAt(safePos.line).text.slice(0, safePos.character)
+      : '';
+    const after = doc.lineAt(safePos.line).text.slice(safePos.character);
+    const prefix = before.length > 0 ? '\n\n' : '';
+    const suffix = after.length > 0 ? '\n' : '';
+
+    await editor.edit(b => b.insert(safePos, `${prefix}${link}${suffix}`));
     vscode.window.showInformationMessage('PDF link inserted');
   }
 
@@ -400,13 +419,22 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     }
     .annotation-highlight {
       position: absolute; pointer-events: all; cursor: pointer;
-      border-radius: 2px; transition: opacity 0.2s;
+      border-radius: 2px;
+      transition: background-color 0.12s, filter 0.12s;
     }
     .annotation-highlight.referenced { background-color: var(--highlight-referenced); }
     .annotation-highlight.annotated { background-color: var(--highlight-annotated); }
-    .annotation-highlight:hover {
-      opacity: 0.8;
-      outline: 2px solid rgba(0, 120, 255, 0.6);
+    /* Coordinated hover: all rects of the same anchor light up together,
+       so a multi-line highlight reads as a single selection, not one box
+       per wrapped line. */
+    .annotation-highlight.hover-active {
+      filter: brightness(1.25) saturate(1.2);
+    }
+    .annotation-highlight.referenced.hover-active {
+      background-color: rgba(90, 200, 120, 0.65);
+    }
+    .annotation-highlight.annotated.hover-active {
+      background-color: rgba(255, 230, 0, 0.55);
     }
     .selection-toolbar {
       position: absolute; transform: translateX(-50%);
@@ -512,4 +540,29 @@ function getNonce(): string {
     text += possible.charAt(Math.floor(Math.random() * possible.length));
   }
   return text;
+}
+
+/**
+ * Return a position safe for inserting a `@pdf[[…]]` token:
+ *   • If `cursor` falls inside an existing `@pdf[[…]]` span on the same line,
+ *     move to the line end so we don't nest tokens.
+ *   • Otherwise return the cursor unchanged.
+ */
+function pickSafeInsertPosition(
+  doc: vscode.TextDocument,
+  cursor: vscode.Position,
+): vscode.Position {
+  const line = doc.lineAt(cursor.line).text;
+  // Scan all @pdf[[…]] spans on this line; if the cursor is inside one, bail
+  // to end of line.
+  const re = /@pdf\[\[[^\]]*\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line)) !== null) {
+    const start = m.index;
+    const end = m.index + m[0].length;
+    if (cursor.character > start && cursor.character < end) {
+      return new vscode.Position(cursor.line, line.length);
+    }
+  }
+  return cursor;
 }
