@@ -1,9 +1,9 @@
 {
-  "name": "paper-link",
-  "displayName": "PaperLink",
+  "name": "vscode-pdf-done-right",
+  "displayName": "vscode-PDF-done-right",
   "description": "Bidirectional links between PDF annotations and Markdown notes",
   "version": "0.2.0",
-  "publisher": "paper-link",
+  "publisher": "t04dj14n9",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -23,7 +23,7 @@
     "customEditors": [
       {
         "viewType": "paperlink.pdfViewer",
-        "displayName": "PaperLink PDF Viewer",
+        "displayName": "vscode-PDF-done-right PDF Viewer",
         "selector": [
           {
             "filenamePattern": "*.pdf"
@@ -33,7 +33,7 @@
       },
       {
         "viewType": "paperlink.markdownEditor",
-        "displayName": "PaperLink Markdown Editor (preview)",
+        "displayName": "vscode-PDF-done-right Markdown Editor (preview)",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -45,7 +45,7 @@
     "commands": [
       {
         "command": "paperlink.showAnnotations",
-        "title": "PaperLink: Show All Annotations for Current PDF"
+        "title": "vscode-PDF-done-right: Show All Annotations for Current PDF"
       },
       {
         "command": "paperlink.outlineGoToPage",
@@ -53,29 +53,74 @@
       },
       {
         "command": "paperlink.refreshIndex",
-        "title": "PaperLink: Refresh Reference Index"
+        "title": "vscode-PDF-done-right: Refresh Reference Index"
       },
       {
         "command": "paperlink.openBacklink",
-        "title": "PaperLink: Open Backlink",
+        "title": "vscode-PDF-done-right: Open Backlink",
         "enablement": "false"
       },
       {
         "command": "paperlink.openMarkdownAtLocation",
-        "title": "PaperLink: Open Markdown At Location",
+        "title": "vscode-PDF-done-right: Open Markdown At Location",
         "enablement": "false"
       },
       {
         "command": "paperlink.openInMarkdownEditor",
-        "title": "PaperLink: Open In Obsidian-style Editor (preview)"
+        "title": "vscode-PDF-done-right: Open In Obsidian-style Editor (preview)"
+      },
+      {
+        "command": "paperlink.prevPage",
+        "title": "Previous Page",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "paperlink.nextPage",
+        "title": "Next Page",
+        "icon": "$(arrow-right)"
+      },
+      {
+        "command": "paperlink.zoomIn",
+        "title": "Zoom In",
+        "icon": "$(zoom-in)"
+      },
+      {
+        "command": "paperlink.zoomOut",
+        "title": "Zoom Out",
+        "icon": "$(zoom-out)"
+      },
+      {
+        "command": "paperlink.zoomFitWidth",
+        "title": "Fit Width",
+        "icon": "$(screen-normal)"
       }
     ],
-    "viewsContainers": {
-      "activitybar": [
+    "menus": {
+      "editor/title": [
         {
-          "id": "paperlink",
-          "title": "PaperLink",
-          "icon": "resources/sidebar.svg"
+          "command": "paperlink.prevPage",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@1"
+        },
+        {
+          "command": "paperlink.nextPage",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@2"
+        },
+        {
+          "command": "paperlink.zoomOut",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@3"
+        },
+        {
+          "command": "paperlink.zoomIn",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@4"
+        },
+        {
+          "command": "paperlink.zoomFitWidth",
+          "when": "paperlink.pdfOpen",
+          "group": "navigation@5"
         }
       ]
     },
@@ -86,23 +131,26 @@
           "name": "PDF Outline",
           "when": "paperlink.pdfOpen",
           "icon": "$(book)"
-        }
-      ],
-      "paperlink": [
+        },
         {
           "id": "paperlink.backlinks",
           "name": "Backlinks",
           "icon": "$(references)"
+        },
+        {
+          "id": "paperlink.forwardLinks",
+          "name": "Forward Links",
+          "icon": "$(link-external)"
         }
       ]
     },
     "configuration": {
-      "title": "PaperLink",
+      "title": "vscode-PDF-done-right",
       "properties": {
         "paperlink.debugLogging": {
           "type": "boolean",
           "default": false,
-          "description": "Emit verbose debug output to the PaperLink output channel."
+          "description": "Emit verbose debug output to the vscode-PDF-done-right output channel."
         }
       }
     },

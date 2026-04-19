@@ -21,7 +21,7 @@ The extension host handles file I/O, VS Code API integration, and annotation sto
 ## File Map
 
 ```
-paper-link/
+vscode-PDF-done-right/
 ├── src/                            Extension host (Node.js, CommonJS)
 │   ├── extension.ts                Entry point; registers all providers, commands, views
 │   ├── pdfEditorProvider.ts        CustomReadonlyEditorProvider; manages webview lifecycle,

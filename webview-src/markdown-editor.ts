@@ -1,3 +1,4 @@
+/// <reference path="./vscode.d.ts" />
 /**
  * Placeholder webview script for the future Obsidian-style markdown editor.
  * Today: just mirrors the host's `setText` into a <pre> preview element so

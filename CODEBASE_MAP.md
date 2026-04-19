@@ -2,7 +2,7 @@
 
 **Project**: PaperLink  
 **Version**: 0.1.0  
-**Repository**: paper-link  
+**Repository**: vscode-PDF-done-right  
 **Total Lines of Code**: ~1,560 (all TypeScript source files)  
 **Build System**: Webpack + TypeScript  
 **Test Framework**: Mocha  
@@ -23,7 +23,7 @@ PaperLink is a VS Code extension that creates **bidirectional links between PDF 
 ## 📁 Directory Structure
 
 ```
-paper-link/
+vscode-PDF-done-right/
 ├── src/                          # Extension host code (Node.js)
 │   ├── extension.ts              # Entry point, registration hub
 │   ├── pdfEditorProvider.ts       # Custom editor for PDF webview
@@ -853,7 +853,7 @@ npm test
 ### **Packaging**
 ```bash
 npm run package
-# Creates paper-link-0.1.0.vsix file
+# Creates vscode-PDF-done-right-0.1.0.vsix file
 ```
 
 ---

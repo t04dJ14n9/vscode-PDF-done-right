@@ -9,8 +9,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/t04dJ14n9/vscode-PDFWeave.git
-cd vscode-PDFWeave
+git clone https://github.com/t04dJ14n9/vscode-PDF-done-right.git
+cd vscode-PDF-done-right
 npm install
 npm run compile
 ```
@@ -59,13 +59,13 @@ This runs `webpack --mode production`, compiles tests with `tsc`, then launches 
 ### Package
 
 ```bash
-npm run package   # Creates paper-link-0.1.0.vsix
+npm run package   # Creates vscode-pdf-done-right-0.1.0.vsix
 ```
 
 Install the VSIX:
 
 ```bash
-code --install-extension paper-link-0.1.0.vsix
+code --install-extension vscode-pdf-done-right-0.1.0.vsix
 ```
 
 ## Project Structure

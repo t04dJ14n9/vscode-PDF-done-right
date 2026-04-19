@@ -17,30 +17,37 @@ export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<{ extendMarkdownIt: (md: any) => any }> {
   const gitRoot = getGitRoot();
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const projectRoot = gitRoot ?? workspaceRoot;
   const indexService = new IndexService();
 
-  if (gitRoot) {
+  if (projectRoot) {
     try {
-      await indexService.init(gitRoot);
+      await indexService.init(projectRoot);
     } catch (e) {
       log.error('IndexService init failed', e);
     }
 
-    const indexer = new MarkdownIndexer(indexService, gitRoot);
+    const indexer = new MarkdownIndexer(indexService, projectRoot);
     // Kick off the full scan in the background — don't block activation.
     indexer.init().catch(e => log.error('MarkdownIndexer.init failed', e));
     context.subscriptions.push(indexer);
 
-    const renameWatcher = new FileRenameWatcher(indexService, gitRoot);
+    const renameWatcher = new FileRenameWatcher(indexService, projectRoot);
     context.subscriptions.push(renameWatcher);
 
-    // Backlinks right-sidebar view
-    const backlinks = new BacklinksProvider(indexService, gitRoot);
+    // Backlinks + forward-links views in Explorer.
+    const backlinks = new BacklinksProvider(indexService, projectRoot, 'backlinks');
     const backlinksView = vscode.window.createTreeView('paperlink.backlinks', {
       treeDataProvider: backlinks,
       showCollapseAll: false,
     });
-    context.subscriptions.push(backlinksView);
+    const forwardLinks = new BacklinksProvider(indexService, projectRoot, 'forward');
+    const forwardLinksView = vscode.window.createTreeView('paperlink.forwardLinks', {
+      treeDataProvider: forwardLinks,
+      showCollapseAll: false,
+    });
+    context.subscriptions.push(backlinksView, forwardLinksView);
 
     context.subscriptions.push({
       dispose: () => { void indexService.dispose(); },
@@ -56,7 +63,7 @@ export async function activate(
         'paperlink.openBacklink',
         async (ref: ReferenceEntry) => {
           if (!ref) return;
-          const absPath = path.join(gitRoot, ref.source);
+          const absPath = path.join(projectRoot, ref.source);
           const mdUri = vscode.Uri.file(absPath);
           const doc = await vscode.workspace.openTextDocument(mdUri);
           const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.Active);
@@ -72,7 +79,7 @@ export async function activate(
         'paperlink.openMarkdownAtLocation',
         async (args: { path: string; line: number; col: number }) => {
           if (!args?.path) return;
-          const abs = path.join(gitRoot, args.path);
+          const abs = path.join(projectRoot, args.path);
           const mdUri = vscode.Uri.file(abs);
           const doc = await vscode.workspace.openTextDocument(mdUri);
           const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
@@ -111,7 +118,7 @@ export async function activate(
     context,
     indexService,
     outlineProvider,
-    gitRoot ?? (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()),
+    projectRoot ?? process.cwd(),
   );
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider('paperlink.pdfViewer', pdfProvider, {
@@ -151,8 +158,8 @@ export async function activate(
     vscode.commands.registerCommand('paperlink.showAnnotations', async () => {
       const active = pdfProvider.getActiveWebview();
       if (!active) return;
-      const pdfRel = gitRoot
-        ? path.relative(gitRoot, active.pdfUri.fsPath).replace(/\\/g, '/')
+      const pdfRel = projectRoot
+        ? path.relative(projectRoot, active.pdfUri.fsPath).replace(/\\/g, '/')
         : path.basename(active.pdfUri.fsPath);
       const anns = indexService.getAnnotationsForPdf(pdfRel);
       const items = anns.map(a => ({
@@ -167,6 +174,30 @@ export async function activate(
         const parsed = stringToAnchor(picked.anchor);
         if (parsed) active.goToAnchor(parsed);
       }
+    }),
+  );
+
+  // PDF navigation/zoom commands (editor/title bar buttons)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('paperlink.prevPage', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'navigate', direction: 'prev' });
+    }),
+    vscode.commands.registerCommand('paperlink.nextPage', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'navigate', direction: 'next' });
+    }),
+    vscode.commands.registerCommand('paperlink.zoomIn', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'zoom', delta: 0.25 });
+    }),
+    vscode.commands.registerCommand('paperlink.zoomOut', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'zoom', delta: -0.25 });
+    }),
+    vscode.commands.registerCommand('paperlink.zoomFitWidth', () => {
+      const active = pdfProvider.getActiveWebview();
+      if (active) active.postMessage({ type: 'zoomFitWidth' });
     }),
   );
 

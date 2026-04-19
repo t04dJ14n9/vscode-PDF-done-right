@@ -15,7 +15,7 @@ This guide helps you get up and running with PaperLink development quickly.
 ```bash
 # Clone and install
 git clone <repo-url>
-cd paper-link
+cd vscode-PDF-done-right
 npm install
 
 # Verify build works
@@ -55,7 +55,7 @@ npm run compile-tests && npm run test
 # Create VSIX package
 npm run package
 
-# Output: paper-link-0.1.0.vsix
+# Output: vscode-PDF-done-right-0.1.0.vsix
 ```
 
 ---

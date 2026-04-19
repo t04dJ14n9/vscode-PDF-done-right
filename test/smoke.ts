@@ -2,7 +2,7 @@
  * Smoke-test driver for PaperLink.
  *
  * Prerequisites: a dev VS Code instance running at `--remote-debugging-port=$PORT`
- * with the `paper-link/test-workspace` folder opened. (See README.)
+ * with the `vscode-PDF-done-right/test-workspace` folder opened. (See README.)
  *
  * Usage: `PORT=9333 node out/test/smoke.js` after `npx tsc -p test/tsconfig.json`.
  */

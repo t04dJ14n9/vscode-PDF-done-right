@@ -197,7 +197,7 @@ npm run compile-tests && npm run test  # Compile then test
 
 ### VSIX Package
 ```bash
-npm run package   # Creates paper-link-0.1.0.vsix
+npm run package   # Creates vscode-PDF-done-right-0.1.0.vsix
 ```
 
 ### Packaging Checklist

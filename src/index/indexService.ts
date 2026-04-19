@@ -13,6 +13,7 @@ import {
 } from '../shared/types';
 import {
   INDEX_DIR,
+  cleanOrphanTmps,
   emptyIndex,
   indexFilePath,
   loadIndex,
@@ -72,6 +73,9 @@ export class IndexService {
 
     this.index = await loadIndex(gitRoot);
     this.rebuildIndexes();
+
+    // Clean up orphaned temp files from crashed atomic saves
+    await cleanOrphanTmps(gitRoot);
 
     if (!existed) {
       const migrated = await this.migrateLegacySidecars();

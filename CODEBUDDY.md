@@ -17,7 +17,7 @@ npm run compile-tests       # tsc -p test/tsconfig.json → out/**
 npm test                    # compile + compile-tests + launch VS Code Electron runner
 
 npm run lint                # eslint src --ext ts
-npm run package             # vsce package → paper-link-0.2.0.vsix
+npm run package             # vsce package → vscode-PDF-done-right-0.2.0.vsix
 ```
 
 ### Running a single test

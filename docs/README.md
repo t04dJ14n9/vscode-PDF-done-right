@@ -16,8 +16,8 @@ PaperLink is a VS Code extension that turns your editor into a research reading 
 ## Quick Start
 
 ```bash
-git clone https://github.com/t04dJ14n9/vscode-PDFWeave.git
-cd vscode-PDFWeave
+git clone https://github.com/t04dJ14n9/vscode-PDF-done-right.git
+cd vscode-PDF-done-right
 npm install
 npm run compile
 ```

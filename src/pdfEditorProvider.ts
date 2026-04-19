@@ -19,11 +19,16 @@ interface ActiveWebviewInfo {
   pdfUri: vscode.Uri;
   goToAnchor(anchor: PdfAnchor): void;
   goToPage(page: number): void;
+  postMessage(msg: ExtensionToWebviewMessage): void;
 }
 
 export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
   private webviews = new Map<string, ActiveWebviewInfo>();
   private activeDocKey: string | undefined;
+  private statusBarItem: vscode.StatusBarItem;
+  private currentPage = 1;
+  private totalPages = 0;
+  private currentScale = 1.5;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -31,6 +36,10 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     private readonly outlineProvider: PdfOutlineProvider,
     private readonly gitRoot: string,
   ) {
+    this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    this.statusBarItem.name = 'PaperLink PDF Info';
+    this.context.subscriptions.push(this.statusBarItem);
+
     // Live-refresh open webviews when the index changes (e.g. a referenced
     // markdown file is saved — new highlights should appear immediately).
     this.context.subscriptions.push(
@@ -43,6 +52,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
         }
       }),
     );
+  }
+
+  private updateStatusBar(): void {
+    this.statusBarItem.text = `$(file-text) ${this.currentPage} / ${this.totalPages}  $(zoom-original) ${Math.round(this.currentScale * 100)}%`;
+    this.statusBarItem.show();
   }
 
   getActiveWebview(): ActiveWebviewInfo | undefined {
@@ -95,7 +109,11 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
       });
     };
 
-    this.webviews.set(key, { panel: webviewPanel, pdfUri, goToAnchor, goToPage });
+    const postMessage = (msg: ExtensionToWebviewMessage) => {
+      this.postMessage(webviewPanel.webview, msg);
+    };
+
+    this.webviews.set(key, { panel: webviewPanel, pdfUri, goToAnchor, goToPage, postMessage });
     this.activeDocKey = key;
     vscode.commands.executeCommand('setContext', 'paperlink.pdfOpen', true);
 
@@ -175,6 +193,13 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
           case 'selectionMade':
             break;
           case 'pageChanged':
+            this.currentPage = msg.page;
+            this.totalPages = msg.totalPages;
+            this.updateStatusBar();
+            break;
+          case 'zoomChanged':
+            this.currentScale = msg.scale;
+            this.updateStatusBar();
             break;
         }
       },
@@ -187,6 +212,9 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
         this.activeDocKey = key;
         vscode.commands.executeCommand('setContext', 'paperlink.pdfOpen', true);
         this.sendHighlights(webviewPanel.webview, pdfUri);
+        this.updateStatusBar();
+      } else {
+        this.statusBarItem.hide();
       }
     });
 
@@ -196,6 +224,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
         this.activeDocKey = undefined;
         this.outlineProvider.clear();
         vscode.commands.executeCommand('setContext', 'paperlink.pdfOpen', false);
+        this.statusBarItem.hide();
       }
     });
   }
@@ -346,10 +375,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
   <style>
     :root {
       --bg: #1e1e1e;
-      --toolbar-bg: #252526;
       --text: #cccccc;
-      --btn-bg: #3c3c3c;
-      --btn-hover: #505050;
       --page-bg: #ffffff;
       --highlight-annotated: rgba(255, 230, 0, 0.35);
       --highlight-referenced: rgba(90, 200, 120, 0.40);
@@ -359,10 +385,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     }
     [data-theme="light"] {
       --bg: #f3f3f3;
-      --toolbar-bg: #e8e8e8;
       --text: #333333;
-      --btn-bg: #d4d4d4;
-      --btn-hover: #c0c0c0;
       --popover-bg: #ffffff;
       --popover-border: #d0d0d0;
     }
@@ -372,22 +395,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       overflow: hidden; height: 100vh;
       display: flex; flex-direction: column;
-    }
-    .toolbar {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 12px;
-      background: var(--toolbar-bg);
-      border-bottom: 1px solid rgba(128,128,128,0.2);
-      flex-shrink: 0; z-index: 100;
-    }
-    .toolbar button {
-      background: var(--btn-bg); color: var(--text); border: none;
-      padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 13px;
-    }
-    .toolbar button:hover { background: var(--btn-hover); }
-    .toolbar .separator { width: 1px; height: 20px; background: rgba(128,128,128,0.3); }
-    .toolbar #page-info, .toolbar #zoom-level {
-      font-size: 13px; min-width: 60px; text-align: center;
     }
     #viewer-container {
       flex: 1; overflow-y: auto; overflow-x: auto;
@@ -510,16 +517,6 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
   </style>
 </head>
 <body>
-  <div class="toolbar">
-    <button id="btn-prev" title="Previous page">&#9664;</button>
-    <span id="page-info">1 / 1</span>
-    <button id="btn-next" title="Next page">&#9654;</button>
-    <div class="separator"></div>
-    <button id="btn-zoom-out" title="Zoom out">&minus;</button>
-    <span id="zoom-level">150%</span>
-    <button id="btn-zoom-in" title="Zoom in">+</button>
-    <button id="btn-zoom-fit" title="Fit width">Fit</button>
-  </div>
   <div id="viewer-container">
     <div id="page-container"></div>
   </div>

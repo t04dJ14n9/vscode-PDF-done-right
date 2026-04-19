@@ -338,7 +338,7 @@ img-src blob: data:
 
 ```bash
 # Clone repo
-cd paper-link
+cd vscode-PDF-done-right
 
 # Install dependencies
 npm install

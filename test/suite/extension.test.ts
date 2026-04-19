@@ -17,7 +17,7 @@ suite('PaperLink Extension Test Suite', () => {
   });
 
   test('Extension should be present', () => {
-    const ext = vscode.extensions.getExtension('paper-link.paper-link');
+    const ext = vscode.extensions.getExtension('t04dj14n9.vscode-pdf-done-right');
     assert.ok(ext, 'Extension should be installed');
   });
 
@@ -28,7 +28,7 @@ suite('PaperLink Extension Test Suite', () => {
     const uri = vscode.Uri.file(pdfPath);
     await vscode.commands.executeCommand('vscode.openWith', uri, 'paperlink.pdfViewer');
 
-    const ext = vscode.extensions.getExtension('paper-link.paper-link');
+    const ext = vscode.extensions.getExtension('t04dj14n9.vscode-pdf-done-right');
     assert.ok(ext, 'Extension should be installed');
 
     if (!ext.isActive) {

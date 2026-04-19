@@ -42,9 +42,9 @@ function cdpScreenshot(wsUrl: string, path: string): Promise<void> {
 
 async function main() {
   const targets: any[] = await (await fetch('http://localhost:9222/json')).json();
-  const paperlink = targets.find((t: any) => t.url?.includes('paper-link.paper-link'));
+  const paperlink = targets.find((t: any) => t.url?.includes('t04dj14n9.vscode-pdf-done-right'));
   if (!paperlink) {
-    console.log('No PaperLink target found. Targets:');
+    console.log('No vscode-PDF-done-right target found. Targets:');
     for (const t of targets) {
       const ext = t.url?.match(/extensionId=([^&]*)/)?.[1] || 'n/a';
       console.log('  [' + t.type + '] ext=' + ext + ' → ' + (t.title || '').slice(0, 70));
@@ -53,7 +53,7 @@ async function main() {
   }
 
   const wsUrl = paperlink.webSocketDebuggerUrl;
-  console.log('Found PaperLink webview, probing inner iframe...\n');
+  console.log('Found vscode-PDF-done-right webview, probing inner iframe...\n');
 
   const expr = [
     '(function() {',

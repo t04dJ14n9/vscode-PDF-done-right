@@ -145,7 +145,10 @@ export type ExtensionToWebviewMessage =
       anchor: PdfAnchor;
       items: ReferenceListItem[];
     }
-  | { type: 'setTheme'; theme: 'light' | 'dark' };
+  | { type: 'setTheme'; theme: 'light' | 'dark' }
+  | { type: 'navigate'; direction: 'prev' | 'next' }
+  | { type: 'zoom'; delta: number }
+  | { type: 'zoomFitWidth' };
 
 /** Outline item from PDFium's getBookmarks() */
 export interface PdfOutlineItem {
@@ -157,7 +160,7 @@ export interface PdfOutlineItem {
 export type WebviewToExtensionMessage =
   | { type: 'ready' }
   | { type: 'selectionMade'; anchor: PdfAnchor }
-  | { type: 'pageChanged'; page: number }
+  | { type: 'pageChanged'; page: number; totalPages: number }
   | { type: 'requestInsertLink'; anchor: PdfAnchor }
   | { type: 'copyLinkToClipboard'; anchor: PdfAnchor }
   | { type: 'requestReferencesForAnchor'; anchor: PdfAnchor }
@@ -167,4 +170,5 @@ export type WebviewToExtensionMessage =
       line: number;
       col: number;
     }
+  | { type: 'zoomChanged'; scale: number }
   | { type: 'outline'; items: PdfOutlineItem[] };

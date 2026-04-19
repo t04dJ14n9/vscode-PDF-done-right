@@ -61,7 +61,6 @@ class PdfViewer {
     this.container = document.getElementById('viewer-container')!;
     this.pageContainer = document.getElementById('page-container')!;
 
-    this.setupControls();
     this.setupMessageListener();
     this.setupSelectionListener();
 
@@ -91,16 +90,18 @@ class PdfViewer {
         case 'setTheme':
           document.body.dataset.theme = msg.theme;
           break;
+        case 'navigate':
+          if (msg.direction === 'prev') this.prevPage();
+          else this.nextPage();
+          break;
+        case 'zoom':
+          this.zoom(msg.delta);
+          break;
+        case 'zoomFitWidth':
+          this.zoomFitWidth();
+          break;
       }
     });
-  }
-
-  private setupControls(): void {
-    document.getElementById('btn-prev')?.addEventListener('click', () => this.prevPage());
-    document.getElementById('btn-next')?.addEventListener('click', () => this.nextPage());
-    document.getElementById('btn-zoom-in')?.addEventListener('click', () => this.zoom(0.25));
-    document.getElementById('btn-zoom-out')?.addEventListener('click', () => this.zoom(-0.25));
-    document.getElementById('btn-zoom-fit')?.addEventListener('click', () => this.zoomFitWidth());
   }
 
   private setupSelectionListener(): void {
@@ -675,13 +676,12 @@ class PdfViewer {
       p.textRects = null;
     }
     this.renderAllVisiblePages();
-    document.getElementById('zoom-level')!.textContent = `${Math.round(this.scale * 100)}%`;
+    vscode.postMessage({ type: 'zoomChanged', scale: this.scale });
   }
 
   private updatePageInfo(): void {
     const total = pdfDoc ? pdfDoc.pageCount : 0;
-    document.getElementById('page-info')!.textContent = `${this.currentPage} / ${total}`;
-    vscode.postMessage({ type: 'pageChanged', page: this.currentPage });
+    vscode.postMessage({ type: 'pageChanged', page: this.currentPage, totalPages: total });
   }
 }
 

@@ -54,6 +54,22 @@ export async function loadIndex(gitRoot: string): Promise<IndexFile> {
   }
 }
 
+/** Remove orphaned `.tmp-*` files left by crashed atomic saves. */
+export async function cleanOrphanTmps(gitRoot: string): Promise<void> {
+  const dir = path.join(gitRoot, INDEX_DIR);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return; // directory doesn't exist yet — nothing to clean
+  }
+  await Promise.all(
+    entries
+      .filter(e => e.startsWith(INDEX_FILENAME + '.tmp-'))
+      .map(e => fs.unlink(path.join(dir, e)).catch(() => {})),
+  );
+}
+
 /** Write `index.json` atomically to `<gitRoot>/.paperlink/index.json`. */
 export async function saveIndex(gitRoot: string, index: IndexFile): Promise<void> {
   const dir = path.join(gitRoot, INDEX_DIR);

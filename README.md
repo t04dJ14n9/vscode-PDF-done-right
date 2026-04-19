@@ -89,7 +89,7 @@ Renames performed **outside** VS Code (e.g. `git mv` on the terminal) are not de
 | **Extension Host** | Node.js, VS Code API, TypeScript |
 | **PDF Rendering** | PDFium via EmbedPDF (WASM) |
 | **Frontend** | Browser/WASM sandbox with DOM APIs |
-| **Build** | Webpack 5 (3 parallel targets) |
+| **Build** | Webpack 5 (4 parallel targets) |
 | **Testing** | Mocha + @vscode/test-electron |
 | **Markup** | Markdown with custom syntax |
 
@@ -102,7 +102,7 @@ Renames performed **outside** VS Code (e.g. `git mv` on the terminal) are not de
 1. **Clone the repository**
    ```bash
    git clone <repo-url>
-   cd paper-link
+   cd vscode-PDF-done-right
    ```
 
 2. **Install dependencies**
@@ -178,9 +178,9 @@ Find where things are:
 - **Webview → Extension**: `ready`, `copyLinkToClipboard`, `requestInsertLink`, `annotationClicked`, etc.
 
 ### Data Storage
-- **Sidecar Files**: `{pdfname}.paperlink.json` stored alongside PDFs
-- **Format**: JSON with versioning, annotations array, metadata
-- **Caching**: In-memory cache for performance
+- **Shared Index**: `<gitRoot>/.paperlink/index.json` (schema v2)
+- **Format**: JSON with versioning, annotations + references arrays, deterministic sort
+- **Caching**: In-memory `IndexService` with derived lookup maps
 
 ---
 
@@ -207,7 +207,7 @@ npm run compile-tests && npm test  # Or compile then test
 
 **Build VSIX package:**
 ```bash
-npm run package      # Creates paper-link-0.1.0.vsix
+npm run package      # Create VSIX package
 ```
 
 **Add a new feature:**
@@ -224,19 +224,26 @@ npm run package      # Creates paper-link-0.1.0.vsix
 
 ### Project Structure
 ```
-paper-link/
+vscode-PDF-done-right/
 ├── src/                          # Extension host (Node.js)
 │   ├── extension.ts              # Entry point & command registration
 │   ├── pdfEditorProvider.ts       # Custom editor & webview lifecycle
-│   ├── annotationService.ts       # Annotation storage & persistence
+│   ├── index/                    # Index subsystem
+│   │   ├── indexFile.ts           # JSON read/write, normalize, atomic save
+│   │   ├── indexService.ts        # In-memory source of truth + lookup maps
+│   │   ├── markdownIndexer.ts     # Watches .md files, keeps references in sync
+│   │   └── fileRenameWatcher.ts   # Rename propagation (planRenames)
 │   ├── pdfLinkProvider.ts         # Markdown link detection
 │   ├── pdfOutlineProvider.ts      # PDF outline tree view
 │   ├── markdownPlugin.ts          # Markdown preview rendering
+│   ├── markdownEditorProvider.ts  # Markdown editor scaffold
+│   ├── backlinksProvider.ts       # Backlinks/Outgoing tree view
 │   └── shared/
 │       └── types.ts              # Shared types & message protocol
 ├── webview-src/                  # Webview (Browser/WASM)
 │   ├── pdf-viewer.ts             # PDF rendering & interaction
-│   └── markdown-preview.ts       # Link handling in preview
+│   ├── markdown-preview.ts       # Link handling in preview
+│   └── markdown-editor.ts        # Markdown editor scaffold
 ├── test/                         # Test suite
 │   ├── suite/extension.test.ts   # Integration tests
 │   ├── runTest.ts                # Test harness
@@ -262,7 +269,9 @@ paper-link/
 - ✅ PDF link detection in Markdown
 - ✅ Custom editor registration
 - ✅ Command registration
-- ✅ Sidecar file handling
+- ✅ Index file handling (load, save, normalize)
+- ✅ Index service (lookup maps, markdown reference parsing)
+- ✅ File rename watcher (planRenames pure function)
 - ✅ Markdown editor integration
 
 ---
@@ -307,7 +316,7 @@ npm run lint         # Lint source code
 | Add a command | `src/extension.ts` |
 | Add message type | `src/shared/types.ts` |
 | Fix PDF rendering | `webview-src/pdf-viewer.ts` |
-| Fix annotation storage | `src/annotationService.ts` |
+| Fix annotation storage | `src/index/indexService.ts` |
 | Fix markdown links | `src/pdfLinkProvider.ts` |
 | Change UI styling | `src/pdfEditorProvider.ts` |
 | Add keyboard shortcut | `package.json` |
@@ -335,7 +344,7 @@ npm run lint         # Lint source code
 **PaperLink** brings the power of Roam Research and Obsidian-style linking to VS Code's PDF integration, enabling researchers and note-takers to work directly in their favorite editor without context-switching.
 
 ### Version
-- **Current**: 0.1.0 (feat/pdfium-wasm branch)
+- **Current**: 0.2.0 (feat/pdfium-wasm branch)
 - **Status**: Active development
 - **Last Updated**: April 18, 2026
 
