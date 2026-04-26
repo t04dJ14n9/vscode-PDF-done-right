@@ -7,6 +7,7 @@ import {
   ExtensionToWebviewMessage,
   WebviewToExtensionMessage,
   formatPdfLink,
+  formatPdfQuote,
   stringToAnchor,
   anchorToString,
   ReferenceListItem,
@@ -37,7 +38,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     private readonly gitRoot: string,
   ) {
     this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    this.statusBarItem.name = 'PaperLink PDF Info';
+    this.statusBarItem.name = 'PDF Done Right Info';
     this.context.subscriptions.push(this.statusBarItem);
 
     // Live-refresh open webviews when the index changes (e.g. a referenced
@@ -66,15 +67,39 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
   async openPdfAtAnchor(pdfPath: string, anchorStr: string): Promise<void> {
     const pdfUri = vscode.Uri.file(path.join(this.gitRoot, pdfPath));
     const anchor = stringToAnchor(anchorStr);
-    if (!anchor) return;
+    if (!anchor) {
+      console.warn(`[PDFDR] openPdfAtAnchor: could not parse anchor "${anchorStr}"`);
+      return;
+    }
 
+    const key = pdfUri.toString();
+    console.log(`[PDFDR] openPdfAtAnchor: pdfPath=${pdfPath}, anchor=${anchorStr}, key=${key}, webviewExists=${this.webviews.has(key)}`);
+
+    // If the PDF is already open, go to the anchor immediately.
+    const existing = this.webviews.get(key);
+    if (existing) {
+      // Focus the existing tab first.
+      await vscode.commands.executeCommand('vscode.openWith', pdfUri, 'paperlink.pdfViewer');
+      existing.goToAnchor(anchor);
+      console.log(`[PDFDR] openPdfAtAnchor: navigated existing webview`);
+      return;
+    }
+
+    // Open the PDF; then poll for the webview to register.
     await vscode.commands.executeCommand('vscode.openWith', pdfUri, 'paperlink.pdfViewer');
+    console.log(`[PDFDR] openPdfAtAnchor: opened PDF, polling for webview...`);
 
-    setTimeout(() => {
-      const key = pdfUri.toString();
+    const maxAttempts = 20;
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, 100));
       const info = this.webviews.get(key);
-      if (info) info.goToAnchor(anchor);
-    }, 500);
+      if (info) {
+        info.goToAnchor(anchor);
+        console.log(`[PDFDR] openPdfAtAnchor: navigated after ${i + 1} polls`);
+        return;
+      }
+    }
+    console.warn(`[PDFDR] openPdfAtAnchor: webview never registered after ${maxAttempts * 100}ms`);
   }
 
   async openCustomDocument(
@@ -131,36 +156,17 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
             );
             break;
 
+          case 'selectionAction':
+            await this.handleSelectionAction(pdfUri, msg.action, msg.anchor);
+            break;
+
           case 'copyLinkToClipboard': {
-            const relPath = this.getRelativePath(pdfUri);
-            const link = formatPdfLink(relPath, msg.anchor);
-            await vscode.env.clipboard.writeText(link);
-            vscode.window.showInformationMessage('PDF link copied to clipboard');
-            // Also record an annotation so the passage is highlighted even
-            // before the user saves a markdown reference to it.
-            this.indexService.upsertAnnotation({
-              pdf: relPath,
-              page: msg.anchor.page,
-              anchor: anchorToString(msg.anchor),
-              snippet: msg.anchor.snippet || '',
-              color: 'rgba(255,230,0,0.35)',
-              createdAt: new Date().toISOString(),
-            });
+            await this.handleSelectionAction(pdfUri, 'copyLink', msg.anchor);
             break;
           }
 
           case 'requestInsertLink': {
-            const relPath = this.getRelativePath(pdfUri);
-            const link = formatPdfLink(relPath, msg.anchor);
-            await this.insertLinkAtCursor(link);
-            this.indexService.upsertAnnotation({
-              pdf: relPath,
-              page: msg.anchor.page,
-              anchor: anchorToString(msg.anchor),
-              snippet: msg.anchor.snippet || '',
-              color: 'rgba(255,230,0,0.35)',
-              createdAt: new Date().toISOString(),
-            });
+            await this.handleSelectionAction(pdfUri, 'insertLink', msg.anchor);
             break;
           }
 
@@ -286,14 +292,73 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     return toPosix(path.relative(this.gitRoot, uri.fsPath));
   }
 
-  private async insertLinkAtCursor(link: string): Promise<void> {
+  private recordAnnotation(pdfUri: vscode.Uri, anchor: PdfAnchor): void {
+    const relPath = this.getRelativePath(pdfUri);
+    this.indexService.upsertAnnotation({
+      pdf: relPath,
+      page: anchor.page,
+      anchor: anchorToString(anchor),
+      snippet: anchor.snippet || '',
+      color: 'rgba(255,230,0,0.35)',
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  private async handleSelectionAction(
+    pdfUri: vscode.Uri,
+    action: 'copyLink' | 'insertLink' | 'copyQuoteAndLink' | 'insertQuoteAndLink' | 'highlight',
+    anchor: PdfAnchor,
+  ): Promise<void> {
+    const relPath = this.getRelativePath(pdfUri);
+
+    switch (action) {
+      case 'copyLink': {
+        await vscode.env.clipboard.writeText(formatPdfLink(relPath, anchor));
+        this.recordAnnotation(pdfUri, anchor);
+        vscode.window.showInformationMessage('PDF link copied to clipboard');
+        return;
+      }
+      case 'insertLink': {
+        await this.insertTextAtCursor(formatPdfLink(relPath, anchor), {
+          insertedMessage: 'PDF link inserted',
+          fallbackMessage: 'No markdown editor is open. Link copied to clipboard.',
+        });
+        this.recordAnnotation(pdfUri, anchor);
+        return;
+      }
+      case 'copyQuoteAndLink': {
+        await vscode.env.clipboard.writeText(formatPdfQuote(relPath, anchor));
+        this.recordAnnotation(pdfUri, anchor);
+        vscode.window.showInformationMessage('Quoted PDF link copied to clipboard');
+        return;
+      }
+      case 'insertQuoteAndLink': {
+        await this.insertTextAtCursor(formatPdfQuote(relPath, anchor), {
+          insertedMessage: 'Quoted PDF link inserted',
+          fallbackMessage: 'No markdown editor is open. Quoted PDF link copied to clipboard.',
+        });
+        this.recordAnnotation(pdfUri, anchor);
+        return;
+      }
+      case 'highlight': {
+        this.recordAnnotation(pdfUri, anchor);
+        vscode.window.showInformationMessage('PDF highlight created');
+        return;
+      }
+    }
+  }
+
+  private async insertTextAtCursor(
+    text: string,
+    options: { insertedMessage: string; fallbackMessage: string },
+  ): Promise<void> {
     const editors = vscode.window.visibleTextEditors.filter(
       e => e.document.languageId === 'markdown',
     );
     const editor = editors[0];
     if (!editor) {
-      vscode.window.showWarningMessage('No markdown editor is open. Link copied to clipboard.');
-      await vscode.env.clipboard.writeText(link);
+      vscode.window.showWarningMessage(options.fallbackMessage);
+      await vscode.env.clipboard.writeText(text);
       return;
     }
 
@@ -315,8 +380,8 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     const prefix = before.length > 0 ? '\n\n' : '';
     const suffix = after.length > 0 ? '\n' : '';
 
-    await editor.edit(b => b.insert(safePos, `${prefix}${link}${suffix}`));
-    vscode.window.showInformationMessage('PDF link inserted');
+    await editor.edit(b => b.insert(safePos, `${prefix}${text}${suffix}`));
+    vscode.window.showInformationMessage(options.insertedMessage);
   }
 
   private async openMarkdownAt(relPath: string, line: number, col: number): Promise<void> {
@@ -371,7 +436,7 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     img-src ${webview.cspSource} blob: data:;
     font-src ${webview.cspSource};
     connect-src ${webview.cspSource};">
-  <title>PaperLink PDF Viewer</title>
+  <title>PDF Done Right Viewer</title>
   <style>
     :root {
       --bg: #1e1e1e;
@@ -379,13 +444,20 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
       --page-bg: #ffffff;
       --highlight-annotated: rgba(255, 230, 0, 0.35);
       --highlight-referenced: rgba(90, 200, 120, 0.40);
-      --selection-toolbar-bg: #007acc;
+      --selection-toolbar-bg: rgba(30, 30, 30, 0.96);
+      --selection-toolbar-border: rgba(255, 255, 255, 0.14);
+      --selection-toolbar-hover: rgba(255,255,255,0.12);
+      --selection-toolbar-primary: #0e639c;
       --popover-bg: #2d2d30;
       --popover-border: #3e3e42;
     }
     [data-theme="light"] {
       --bg: #f3f3f3;
       --text: #333333;
+      --selection-toolbar-bg: rgba(255, 255, 255, 0.98);
+      --selection-toolbar-border: rgba(0, 0, 0, 0.12);
+      --selection-toolbar-hover: rgba(0, 0, 0, 0.06);
+      --selection-toolbar-primary: #005fb8;
       --popover-bg: #ffffff;
       --popover-border: #d0d0d0;
     }
@@ -445,18 +517,61 @@ export class PdfEditorProvider implements vscode.CustomReadonlyEditorProvider {
     }
     .selection-toolbar {
       position: absolute; transform: translateX(-50%);
-      display: flex; gap: 4px; padding: 4px 8px;
+      display: flex; align-items: stretch; gap: 6px; padding: 6px;
       background: var(--selection-toolbar-bg);
-      border-radius: 6px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+      border: 1px solid var(--selection-toolbar-border);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.28);
       z-index: 1000;
     }
-    .selection-toolbar button {
-      background: transparent; color: white; border: none;
-      padding: 4px 8px; border-radius: 3px; cursor: pointer;
-      font-size: 12px; white-space: nowrap;
+    .selection-toolbar-actions {
+      display: flex;
+      gap: 4px;
     }
-    .selection-toolbar button:hover { background: rgba(255,255,255,0.2); }
+    .selection-toolbar button {
+      appearance: none;
+      background: transparent;
+      color: var(--text);
+      border: none;
+      padding: 6px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .selection-toolbar button:hover { background: var(--selection-toolbar-hover); }
+    .selection-toolbar button.primary {
+      background: var(--selection-toolbar-primary);
+      color: #ffffff;
+    }
+    .selection-toolbar button.primary:hover {
+      filter: brightness(1.08);
+      background: var(--selection-toolbar-primary);
+    }
+    .selection-toolbar button.menu-trigger {
+      min-width: 30px;
+      padding-left: 8px;
+      padding-right: 8px;
+      font-size: 13px;
+    }
+    .selection-toolbar-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      display: none;
+      min-width: 220px;
+      padding: 4px;
+      background: var(--selection-toolbar-bg);
+      border: 1px solid var(--selection-toolbar-border);
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+    }
+    .selection-toolbar-menu.open { display: block; }
+    .selection-toolbar-menu .menu-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+    }
 
     .ref-popover {
       position: absolute;
@@ -540,8 +655,8 @@ function getNonce(): string {
 }
 
 /**
- * Return a position safe for inserting a `@pdf[[…]]` token:
- *   • If `cursor` falls inside an existing `@pdf[[…]]` span on the same line,
+ * Return a position safe for inserting a PDF link token:
+ *   • If `cursor` falls inside an existing PDF-link span on the same line,
  *     move to the line end so we don't nest tokens.
  *   • Otherwise return the cursor unchanged.
  */
@@ -550,9 +665,9 @@ function pickSafeInsertPosition(
   cursor: vscode.Position,
 ): vscode.Position {
   const line = doc.lineAt(cursor.line).text;
-  // Scan all @pdf[[…]] spans on this line; if the cursor is inside one, bail
-  // to end of line.
-  const re = /@pdf\[\[[^\]]*\]\]/g;
+  // Scan all known PDF link spans on this line; if the cursor is inside one,
+  // bail to end of line.
+  const re = /(?:@pdf\[\[(?:[^\]]|\](?!\]))*\]\]|\[\[[^\]#|]+?\.pdf#[^\]|]+(?:\|[^\]]*)?\]\])/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(line)) !== null) {
     const start = m.index;

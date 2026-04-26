@@ -16,3 +16,9 @@ Background on @pdf[[sample.pdf#page=1&idx=2&off=0&len=12|"Ashish Vaswani"]] and 
 @pdf[[test-workspace/sample.pdf#page=1&idx=4&off=17&len=91|"neural networks. We propose a new simple network architec..."]]
 
 @pdf[[test-workspace/sample.pdf#page=2&idx=5&off=15&len=30|"nction can be described as map"]]
+
+## Wiki Links
+
+For background, see [[transformers]] and [[attention#Multi-Head]].
+
+Also related: [[notes]] self-reference test.

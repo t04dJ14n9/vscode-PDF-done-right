@@ -50,7 +50,7 @@ function ref(partial: Partial<ReferenceEntry> = {}): ReferenceEntry {
 
 suite('indexFile', () => {
   test('emptyIndex shape', () => {
-    assert.deepStrictEqual(emptyIndex(), { version: 2, annotations: [], references: [] });
+    assert.deepStrictEqual(emptyIndex(), { version: 4, annotations: [], references: [], codeReferences: [], wikiReferences: [] });
   });
 
   test('toPosix converts back-slashes', () => {
@@ -65,7 +65,7 @@ suite('indexFile', () => {
 
   test('normalize sorts annotations deterministically', () => {
     const input: IndexFile = {
-      version: 2,
+      version: 4,
       annotations: [
         ann({ pdf: 'b.pdf', page: 1, anchor: 'x1' }),
         ann({ pdf: 'a.pdf', page: 3, anchor: 'x3' }),
@@ -73,6 +73,8 @@ suite('indexFile', () => {
         ann({ pdf: 'a.pdf', page: 1, anchor: 'x1' }),
       ],
       references: [],
+      codeReferences: [],
+      wikiReferences: [],
     };
     const out = normalize(input);
     assert.deepStrictEqual(
@@ -88,7 +90,7 @@ suite('indexFile', () => {
 
   test('normalize sorts references by (source, line, col)', () => {
     const input: IndexFile = {
-      version: 2,
+      version: 4,
       annotations: [],
       references: [
         ref({ source: 'b.md', sourceLine: 0, sourceCol: 0 }),
@@ -96,6 +98,8 @@ suite('indexFile', () => {
         ref({ source: 'a.md', sourceLine: 3, sourceCol: 10 }),
         ref({ source: 'a.md', sourceLine: 3, sourceCol: 0 }),
       ],
+      codeReferences: [],
+      wikiReferences: [],
     };
     const out = normalize(input);
     assert.deepStrictEqual(
@@ -111,12 +115,14 @@ suite('indexFile', () => {
 
   test('normalize dedupes annotations by (pdf, anchor)', () => {
     const out = normalize({
-      version: 2,
+      version: 4,
       annotations: [
         ann({ anchor: 'X', snippet: 'first' }),
         ann({ anchor: 'X', snippet: 'second' }),
       ],
       references: [],
+      codeReferences: [],
+      wikiReferences: [],
     });
     assert.strictEqual(out.annotations.length, 1);
     assert.strictEqual(out.annotations[0].snippet, 'second');
@@ -124,9 +130,11 @@ suite('indexFile', () => {
 
   test('normalize drops malformed entries', () => {
     const out = normalize({
-      version: 2,
+      version: 4,
       annotations: [ann(), { page: 'nope' } as any, { pdf: 5, anchor: 'x' } as any],
       references: [ref(), { } as any],
+      codeReferences: [],
+      wikiReferences: [],
     });
     assert.strictEqual(out.annotations.length, 1);
     assert.strictEqual(out.references.length, 1);
@@ -135,9 +143,11 @@ suite('indexFile', () => {
   test('load + save roundtrip preserves structure', async () => {
     await withTempDir(async (dir) => {
       const input: IndexFile = {
-        version: 2,
+        version: 4,
         annotations: [ann({ anchor: 'b' }), ann({ anchor: 'a' })],
         references: [ref({ sourceLine: 3 }), ref({ sourceLine: 0 })],
+        codeReferences: [],
+        wikiReferences: [],
       };
       await saveIndex(dir, input);
       const out = await loadIndex(dir);
@@ -177,7 +187,7 @@ suite('indexFile', () => {
 
   test('save uses LF-ending pretty-printed JSON', async () => {
     await withTempDir(async (dir) => {
-      await saveIndex(dir, { version: 2, annotations: [ann()], references: [] });
+      await saveIndex(dir, { version: 4, annotations: [ann()], references: [], codeReferences: [], wikiReferences: [] });
       const raw = await fs.readFile(indexFilePath(dir), 'utf8');
       assert.ok(raw.endsWith('\n'), 'must end with newline');
       assert.ok(raw.includes('\n  '), 'must be pretty-printed (2-space indent)');

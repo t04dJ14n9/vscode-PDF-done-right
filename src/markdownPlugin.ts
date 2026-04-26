@@ -1,7 +1,7 @@
-import { PDF_LINK_REGEX, stringToAnchor } from './shared/types';
+import { findPdfLinkMatches, CODE_LINK_REGEX, stringToAnchor } from './shared/types';
 
 /**
- * Markdown-it plugin that renders @pdf[[...]] links as styled clickable
+ * Markdown-it plugin that renders PDF links as styled clickable
  * elements in VS Code's markdown preview.
  */
 export function activateMarkdownItPlugin(md: any): any {
@@ -21,28 +21,21 @@ export function activateMarkdownItPlugin(md: any): any {
   ): string {
     const content = tokens[idx].content;
 
-    // Check if content contains our PDF link pattern
-    const regex = new RegExp(PDF_LINK_REGEX.source, PDF_LINK_REGEX.flags);
-    if (!regex.test(content)) {
+    const pdfMatches = findPdfLinkMatches(content);
+    if (pdfMatches.length === 0) {
       return defaultRender(tokens, idx, options, env, self);
     }
 
-    // Reset regex and replace matches with styled links
-    const regex2 = new RegExp(PDF_LINK_REGEX.source, PDF_LINK_REGEX.flags);
-    const html = content.replace(
-      regex2,
-      (
-        fullMatch: string,
-        pdfPath: string,
-        anchorStr: string,
-        snippet: string | undefined
-      ) => {
-        const anchor = stringToAnchor(anchorStr);
-        const displayText = snippet || `${pdfPath} p.${anchor?.page || '?'}`;
-        const escapedPath = md.utils.escapeHtml(pdfPath);
-        const escapedAnchor = md.utils.escapeHtml(anchorStr);
+    let cursor = 0;
+    let withPdfReplaced = '';
+    for (const match of pdfMatches) {
+      withPdfReplaced += md.utils.escapeHtml(content.slice(cursor, match.index));
+      const anchor = stringToAnchor(match.anchor);
+      const displayText = match.snippet || `${match.pdfPath} p.${anchor?.page || '?'}`;
+      const escapedPath = md.utils.escapeHtml(match.pdfPath);
+      const escapedAnchor = md.utils.escapeHtml(match.anchor);
 
-        return `<a class="paperlink-pdf-link" href="#"
+      withPdfReplaced += `<a class="paperlink-pdf-link" href="#"
           data-pdf-path="${escapedPath}"
           data-pdf-anchor="${escapedAnchor}"
           title="Open ${escapedPath} at page ${anchor?.page || '?'}"
@@ -60,6 +53,52 @@ export function activateMarkdownItPlugin(md: any): any {
             cursor: pointer;
           ">
           <span style="font-size: 0.85em;">&#128196;</span>
+          ${md.utils.escapeHtml(displayText)}
+        </a>`;
+      cursor = match.index + match.fullMatch.length;
+    }
+    withPdfReplaced += md.utils.escapeHtml(content.slice(cursor));
+
+    // Replace @code[[…]] tokens with styled links
+    const codeRegex = new RegExp(CODE_LINK_REGEX.source, CODE_LINK_REGEX.flags);
+    if (!codeRegex.test(withPdfReplaced)) {
+      return withPdfReplaced;
+    }
+
+    const codeRegex2 = new RegExp(CODE_LINK_REGEX.source, CODE_LINK_REGEX.flags);
+    const html = withPdfReplaced.replace(
+      codeRegex2,
+      (
+        fullMatch: string,
+        codePath: string,
+        startLine: string | undefined,
+        endLine: string | undefined,
+        snippet: string | undefined
+      ) => {
+        const isFolder = codePath.endsWith('/');
+        const displayText = snippet
+          || (startLine ? `${codePath} (line ${startLine})` : (isFolder ? `${codePath}` : `${codePath}`));
+        const escapedPath = md.utils.escapeHtml(codePath);
+
+        return `<a class="paperlink-code-link" href="#"
+          data-code-path="${escapedPath}"
+          data-code-start-line="${startLine || ''}"
+          data-code-end-line="${endLine || ''}"
+          title="Open code: ${escapedPath}${startLine ? ' (line ' + startLine + ')' : ''}"
+          style="
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 1px 6px;
+            background: rgba(88, 166, 255, 0.1);
+            border: 1px solid rgba(88, 166, 255, 0.3);
+            border-radius: 4px;
+            color: #58a6ff;
+            text-decoration: none;
+            font-size: 0.9em;
+            cursor: pointer;
+          ">
+          <span style="font-size: 0.85em;">&#9000;</span>
           ${md.utils.escapeHtml(displayText)}
         </a>`;
       }

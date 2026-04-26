@@ -42,7 +42,7 @@ async function findViewerFrame() {
         expression: '(function(){var f=document.querySelector("iframe");if(!f||!f.contentDocument)return "";return f.contentDocument.title;})()',
         returnByValue: true,
       });
-      if (r.result.value === 'PaperLink PDF Viewer') return f;
+      if (r.result.value === 'PDF Done Right Viewer') return f;
     } catch { /* ignore */ }
   }
   return null;
@@ -51,7 +51,7 @@ async function findViewerFrame() {
 async function main() {
   const viewer = await findViewerFrame();
   if (!viewer) {
-    console.error('No PaperLink viewer iframe found — is the PDF open?');
+    console.error('No PDF Done Right viewer iframe found — is the PDF open?');
     process.exit(2);
   }
 

@@ -15,8 +15,11 @@ interface PdfAnchor {
   page: number;
   textItemIndex: number;
   charOffset: number;
+  endTextItemIndex?: number;
+  endCharOffset?: number;
   length: number;
   snippet: string;
+  extraParams?: Record<string, string>;
 }
 
 interface HighlightSpec {
@@ -46,7 +49,14 @@ interface PageState {
 }
 
 function anchorKey(a: PdfAnchor): string {
-  return `p=${a.page}&i=${a.textItemIndex}&o=${a.charOffset}&l=${a.length}`;
+  return `p=${a.page}&i=${a.textItemIndex}&o=${a.charOffset}&ei=${a.endTextItemIndex ?? -1}&eo=${a.endCharOffset ?? -1}&l=${a.length}`;
+}
+
+function anchorHasSelection(a: PdfAnchor): boolean {
+  return (
+    (typeof a.endTextItemIndex === 'number' && typeof a.endCharOffset === 'number')
+    || a.length > 0
+  );
 }
 
 class PdfViewer {
@@ -56,6 +66,7 @@ class PdfViewer {
   private container: HTMLElement;
   private pageContainer: HTMLElement;
   private highlights: HighlightSpec[] = [];
+  private pendingAnchor: PdfAnchor | null = null;
 
   constructor() {
     this.container = document.getElementById('viewer-container')!;
@@ -115,7 +126,7 @@ class PdfViewer {
     if (!sel || sel.isCollapsed || !sel.rangeCount) return;
 
     const range = sel.getRangeAt(0);
-    const selectedText = sel.toString().trim();
+    const selectedText = sel.toString().replace(/\s+/g, ' ').trim();
     if (!selectedText) return;
 
     const textLayerEl = range.startContainer.parentElement?.closest('.text-layer');
@@ -124,38 +135,66 @@ class PdfViewer {
     const pageNum = parseInt(textLayerEl.getAttribute('data-page') || '0', 10);
     if (!pageNum || !pdfDoc) return;
 
-    const anchor = this.selectionToAnchor(pageNum, selectedText);
+    const anchor = this.selectionToAnchor(pageNum, range, selectedText);
     if (!anchor) return;
 
     this.showSelectionToolbar(anchor, range);
   }
 
-  private selectionToAnchor(pageNum: number, selectedText: string): PdfAnchor | null {
+  private selectionToAnchor(pageNum: number, range: Range, selectedText: string): PdfAnchor | null {
     const pageState = this.pages.get(pageNum);
     if (!pageState?.textRects) return null;
+    const startSpan = this.getTextSpan(range.startContainer);
+    const endSpan = this.getTextSpan(range.endContainer);
+    if (!startSpan || !endSpan) return null;
+    if (startSpan.closest('.text-layer') !== endSpan.closest('.text-layer')) return null;
 
-    const items = pageState.textRects;
-    let fullText = '';
-    const itemOffsets: { start: number; end: number }[] = [];
-    for (const item of items) {
-      const start = fullText.length;
-      fullText += item.content;
-      itemOffsets.push({ start, end: fullText.length });
+    const startIdx = parseInt(startSpan.dataset.itemIndex || '', 10);
+    const endIdx = parseInt(endSpan.dataset.itemIndex || '', 10);
+    if ([startIdx, endIdx].some(isNaN)) return null;
+
+    const startOffset = this.getNodeTextOffset(range.startContainer, range.startOffset, startSpan);
+    const endOffset = this.getNodeTextOffset(range.endContainer, range.endOffset, endSpan);
+    if (startOffset < 0 || endOffset < 0) return null;
+
+    const normalizedStartIdx = startIdx <= endIdx ? startIdx : endIdx;
+    const normalizedEndIdx = startIdx <= endIdx ? endIdx : startIdx;
+    const normalizedStartOffset = startIdx <= endIdx ? startOffset : endOffset;
+    const normalizedEndOffset = startIdx <= endIdx ? endOffset : startOffset;
+
+    return {
+      page: pageNum,
+      textItemIndex: normalizedStartIdx,
+      charOffset: normalizedStartOffset,
+      endTextItemIndex: normalizedEndIdx,
+      endCharOffset: normalizedEndOffset,
+      length: normalizedStartIdx === normalizedEndIdx
+        ? Math.max(0, normalizedEndOffset - normalizedStartOffset)
+        : 0,
+      snippet: selectedText,
+    };
+  }
+
+  private getTextSpan(node: Node | null): HTMLElement | null {
+    if (!node) return null;
+    if (node instanceof HTMLElement) {
+      return node.closest<HTMLElement>('span[data-item-index]');
     }
-    const selIdx = fullText.indexOf(selectedText);
-    if (selIdx === -1) return null;
-    for (let i = 0; i < itemOffsets.length; i++) {
-      if (selIdx >= itemOffsets[i].start && selIdx < itemOffsets[i].end) {
-        return {
-          page: pageNum,
-          textItemIndex: i,
-          charOffset: selIdx - itemOffsets[i].start,
-          length: selectedText.length,
-          snippet: selectedText,
-        };
+    return node.parentElement?.closest<HTMLElement>('span[data-item-index]') || null;
+  }
+
+  private getNodeTextOffset(node: Node, offset: number, span: HTMLElement): number {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return Math.min(offset, node.textContent?.length ?? 0);
+    }
+    if (node === span) {
+      const child = span.childNodes[Math.min(offset, Math.max(0, span.childNodes.length - 1))];
+      if (child?.nodeType === Node.TEXT_NODE) {
+        return offset === 0 ? 0 : (child.textContent?.length ?? 0);
       }
+      return offset === 0 ? 0 : (span.textContent?.length ?? 0);
     }
-    return null;
+    return Math.min(offset, span.textContent?.length ?? 0);
   }
 
   private showSelectionToolbar(anchor: PdfAnchor, range: Range): void {
@@ -165,36 +204,144 @@ class PdfViewer {
     const toolbar = document.createElement('div');
     toolbar.id = 'selection-toolbar';
     toolbar.className = 'selection-toolbar';
-    toolbar.style.top = `${rect.top - 40 + window.scrollY}px`;
-    toolbar.style.left = `${rect.left + rect.width / 2}px`;
+    toolbar.style.top = `${rect.top - 48 + window.scrollY}px`;
+    toolbar.style.left = `${rect.left + rect.width / 2 + window.scrollX}px`;
 
-    const copyBtn = document.createElement('button');
-    copyBtn.textContent = 'Copy Link';
-    copyBtn.title = 'Copy PDF link to clipboard (also creates a highlight)';
-    copyBtn.addEventListener('click', () => {
-      vscode.postMessage({ type: 'copyLinkToClipboard', anchor });
+    const actions = document.createElement('div');
+    actions.className = 'selection-toolbar-actions';
+
+    const menu = document.createElement('div');
+    menu.className = 'selection-toolbar-menu';
+    menu.setAttribute('role', 'menu');
+
+    const dismissToolbar = () => {
       toolbar.remove();
-    });
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
 
-    const insertBtn = document.createElement('button');
-    insertBtn.textContent = 'Insert in Note';
-    insertBtn.title = 'Insert link at cursor in active markdown editor';
-    insertBtn.addEventListener('click', () => {
-      vscode.postMessage({ type: 'requestInsertLink', anchor });
-      toolbar.remove();
-    });
+    const runAction = (
+      action: 'copyLink' | 'insertLink' | 'copyQuoteAndLink' | 'insertQuoteAndLink' | 'highlight',
+    ) => {
+      vscode.postMessage({ type: 'selectionAction', action, anchor });
+      dismissToolbar();
+    };
 
-    toolbar.appendChild(copyBtn);
-    toolbar.appendChild(insertBtn);
+    const makeButton = (
+      label: string,
+      title: string,
+      onClick: () => void,
+      className?: string,
+    ): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.title = title;
+      btn.className = className ?? '';
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      });
+      return btn;
+    };
+
+    const setMenuOpen = (open: boolean) => {
+      menu.classList.toggle('open', open);
+      moreBtn.setAttribute('aria-expanded', String(open));
+    };
+
+    const copyBtn = makeButton(
+      'Copy Link',
+      'Copy the Obsidian-compatible PDF link',
+      () => runAction('copyLink'),
+      'primary',
+    );
+    const insertBtn = makeButton(
+      'Insert Link',
+      'Insert the PDF link into the active markdown note',
+      () => runAction('insertLink'),
+    );
+    const moreBtn = makeButton(
+      '▾',
+      'More selection actions',
+      () => setMenuOpen(!menu.classList.contains('open')),
+      'menu-trigger',
+    );
+    moreBtn.setAttribute('aria-haspopup', 'menu');
+    moreBtn.setAttribute('aria-expanded', 'false');
+
+    const menuActions: Array<{
+      label: string;
+      title: string;
+      action: 'copyLink' | 'insertLink' | 'copyQuoteAndLink' | 'insertQuoteAndLink' | 'highlight';
+    }> = [
+      {
+        label: 'Copy Link',
+        title: 'Copy the PDF deep link to the clipboard',
+        action: 'copyLink',
+      },
+      {
+        label: 'Insert Link in Note',
+        title: 'Insert the PDF deep link at the markdown cursor',
+        action: 'insertLink',
+      },
+      {
+        label: 'Copy Quote and Link',
+        title: 'Copy a quoted block followed by the PDF link',
+        action: 'copyQuoteAndLink',
+      },
+      {
+        label: 'Insert Quote and Link',
+        title: 'Insert a quoted block plus the PDF link in the active note',
+        action: 'insertQuoteAndLink',
+      },
+      {
+        label: 'Highlight Selection',
+        title: 'Create a highlight without copying or inserting anything',
+        action: 'highlight',
+      },
+    ];
+
+    for (const item of menuActions) {
+      const option = makeButton(item.label, item.title, () => runAction(item.action), 'menu-item');
+      option.setAttribute('role', 'menuitem');
+      menu.appendChild(option);
+    }
+
+    actions.appendChild(copyBtn);
+    actions.appendChild(insertBtn);
+    actions.appendChild(moreBtn);
+    toolbar.appendChild(actions);
+    toolbar.appendChild(menu);
     document.body.appendChild(toolbar);
 
-    const removeToolbar = (e: MouseEvent) => {
+    requestAnimationFrame(() => {
+      const box = toolbar.getBoundingClientRect();
+      const minLeft = 12 + window.scrollX + box.width / 2;
+      const maxLeft = window.scrollX + window.innerWidth - 12 - box.width / 2;
+      const currentLeft = rect.left + rect.width / 2 + window.scrollX;
+      const clampedLeft = Math.max(minLeft, Math.min(maxLeft, currentLeft));
+      let top = rect.top - box.height - 12 + window.scrollY;
+      if (top < window.scrollY + 12) {
+        top = rect.bottom + 12 + window.scrollY;
+      }
+      toolbar.style.left = `${clampedLeft}px`;
+      toolbar.style.top = `${top}px`;
+    });
+
+    const onPointerDown = (e: MouseEvent) => {
       if (!toolbar.contains(e.target as Node)) {
-        toolbar.remove();
-        document.removeEventListener('mousedown', removeToolbar);
+        dismissToolbar();
       }
     };
-    setTimeout(() => document.addEventListener('mousedown', removeToolbar), 100);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') dismissToolbar();
+    };
+    setTimeout(() => {
+      document.addEventListener('mousedown', onPointerDown);
+      document.addEventListener('keydown', onKeyDown);
+    }, 0);
   }
 
   private async loadPdf(base64Data: string): Promise<void> {
@@ -209,6 +356,13 @@ class PdfViewer {
       this.updatePageInfo();
       await this.renderAllVisiblePages();
       await this.extractAndSendOutline();
+
+      // If goToAnchor was called before the PDF finished loading, apply it now.
+      if (this.pendingAnchor) {
+        const anchor = this.pendingAnchor;
+        this.pendingAnchor = null;
+        await this.goToAnchor(anchor);
+      }
     } catch (e: any) {
       console.error('Failed to load PDF:', e);
       this.pageContainer.innerHTML = `<div class="error">Failed to load PDF: ${e?.message || e}</div>`;
@@ -222,9 +376,9 @@ class PdfViewer {
       const bookmarksObj = await engine.getBookmarks(pdfDoc).toPromise();
       const raw = bookmarksObj?.bookmarks ?? [];
       bookmarkItems = raw.length ? this.convertBookmarks(raw) : [];
-      console.log(`[PaperLink] PDF outline: ${raw.length} top-level bookmarks`);
+      console.log(`[PDFDR] PDF outline: ${raw.length} top-level bookmarks`);
     } catch (e) {
-      console.error('[PaperLink] getBookmarks failed:', e);
+      console.error('[PDFDR] getBookmarks failed:', e);
     }
     if (bookmarkItems.length === 0) {
       // Fall back to a flat page list so the Outline panel is always useful.
@@ -233,7 +387,7 @@ class PdfViewer {
       for (let i = 1; i <= total; i++) {
         bookmarkItems.push({ title: `Page ${i}`, page: i, children: [] });
       }
-      console.log(`[PaperLink] No embedded bookmarks; synthesized ${total} page entries.`);
+      console.log(`[PDFDR] No embedded bookmarks; synthesized ${total} page entries.`);
     }
     vscode.postMessage({ type: 'outline', items: bookmarkItems });
   }
@@ -354,21 +508,27 @@ class PdfViewer {
       const textRects: any[] = await engine.getPageTextRects(pdfDoc, pageObj).toPromise();
       pageState.textRects = textRects;
       pageState.textLayer.innerHTML = '';
-      for (const item of textRects) {
+      textRects.forEach((item, itemIndex) => {
         const span = document.createElement('span');
         span.textContent = item.content;
         const left = item.rect.origin.x * this.scale;
         const top = item.rect.origin.y * this.scale;
         const width = item.rect.size.width * this.scale;
         const height = item.rect.size.height * this.scale;
+        span.dataset.itemIndex = String(itemIndex);
         span.style.left = `${left}px`;
         span.style.top = `${top}px`;
-        span.style.width = `${width}px`;
         span.style.height = `${height}px`;
-        span.style.fontSize = `${item.font.size * this.scale}px`;
+        span.style.lineHeight = `${height}px`;
+        span.style.fontSize = `${Math.max(1, height)}px`;
         span.style.fontFamily = item.font.family || 'sans-serif';
+        span.style.transformOrigin = 'left top';
+        span.style.display = 'inline-block';
         pageState.textLayer.appendChild(span);
-      }
+        const naturalWidth = span.getBoundingClientRect().width;
+        const scaleX = naturalWidth > 0 ? width / naturalWidth : 1;
+        span.style.transform = `scaleX(${scaleX})`;
+      });
 
       this.drawHighlightsForPage(pageNum);
     } catch (e) {
@@ -401,14 +561,15 @@ class PdfViewer {
       group.style.bottom = '0';
       group.style.pointerEvents = 'none';
 
-      let charCount = 0;
-      for (let i = anchor.textItemIndex; i < items.length && charCount < anchor.length; i++) {
+      const endItemIndex = anchor.endTextItemIndex ?? anchor.textItemIndex;
+      const endCharOffset = anchor.endCharOffset ?? (anchor.charOffset + anchor.length);
+      for (let i = anchor.textItemIndex; i < items.length && i <= endItemIndex; i++) {
         const item = items[i];
         const total = item.content.length;
         if (total === 0) continue;
         const startChar = i === anchor.textItemIndex ? anchor.charOffset : 0;
-        const availableChars = total - startChar;
-        const charsToHighlight = Math.min(availableChars, anchor.length - charCount);
+        const endChar = i === endItemIndex ? Math.min(total, endCharOffset) : total;
+        const charsToHighlight = endChar - startChar;
         if (charsToHighlight <= 0) continue;
 
         // Slice the text-item's bounding rect proportionally by character range
@@ -466,7 +627,6 @@ class PdfViewer {
         });
 
         group.appendChild(hl);
-        charCount += charsToHighlight;
       }
 
       pageState.highlightLayer.appendChild(group);
@@ -616,27 +776,30 @@ class PdfViewer {
 
   async goToAnchor(anchor: PdfAnchor): Promise<void> {
     const pageEl = document.getElementById(`page-${anchor.page}`);
-    if (pageEl) {
-      pageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      this.currentPage = anchor.page;
-      this.updatePageInfo();
+    if (!pageEl) {
+      // PDF not loaded yet — queue the anchor for after loadPdf completes.
+      this.pendingAnchor = anchor;
+      return;
+    }
+    pageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    this.currentPage = anchor.page;
+    this.updatePageInfo();
 
-      if (!this.pages.get(anchor.page)?.rendered) await this.renderPage(anchor.page);
+    if (!this.pages.get(anchor.page)?.rendered) await this.renderPage(anchor.page);
 
-      if (anchor.length > 0) {
-        // Transient blue flash to indicate the target.
-        const ghost: HighlightSpec = {
-          anchor,
-          kind: 'annotated',
-          color: 'rgba(0, 150, 255, 0.4)',
-        };
-        this.highlights.push(ghost);
+    if (anchorHasSelection(anchor)) {
+      // Transient blue flash to indicate the target.
+      const ghost: HighlightSpec = {
+        anchor,
+        kind: 'annotated',
+        color: 'rgba(0, 150, 255, 0.4)',
+      };
+      this.highlights.push(ghost);
+      this.redrawAllHighlights();
+      setTimeout(() => {
+        this.highlights = this.highlights.filter(h => h !== ghost);
         this.redrawAllHighlights();
-        setTimeout(() => {
-          this.highlights = this.highlights.filter(h => h !== ghost);
-          this.redrawAllHighlights();
-        }, 2000);
-      }
+      }, 2000);
     }
   }
 

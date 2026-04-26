@@ -19,7 +19,7 @@ function ref(partial: Partial<ReferenceEntry> = {}): ReferenceEntry {
 suite('planRenames', () => {
   test('empty renames → empty plan', () => {
     const p = planRenames([], []);
-    assert.deepStrictEqual(p, { textEdits: [], pdfRenames: [], mdRenames: [] });
+    assert.deepStrictEqual(p, { textEdits: [], pdfRenames: [], mdRenames: [], codeTargetRenames: [] });
   });
 
   test('identical old/new is dropped', () => {
@@ -40,12 +40,12 @@ suite('planRenames', () => {
     assert.strictEqual(p.pdfRenames.length, 0);
   });
 
-  test('other extensions are ignored', () => {
+  test('other extensions are classified as code target renames', () => {
     const p = planRenames(
       [{ oldRel: 'a.png', newRel: 'b.png' }, { oldRel: 'tmp.tmp', newRel: 'tmp2.tmp' }],
       [],
     );
-    assert.deepStrictEqual(p, { textEdits: [], pdfRenames: [], mdRenames: [] });
+    assert.deepStrictEqual(p, { textEdits: [], pdfRenames: [], mdRenames: [], codeTargetRenames: [{ oldRel: 'a.png', newRel: 'b.png' }, { oldRel: 'tmp.tmp', newRel: 'tmp2.tmp' }] });
   });
 
   test('PDF rename produces a text edit for each referencing .md', () => {
@@ -60,8 +60,8 @@ suite('planRenames', () => {
     assert.strictEqual(p.textEdits.length, 2);
     // Replacement should use the new PDF path
     for (const te of p.textEdits) {
-      assert.ok(te.replacement.startsWith('@pdf[[papers/2017-attention.pdf#'));
-      assert.ok(te.replacement.includes('"self-attention"'));
+      assert.ok(te.replacement.startsWith('[[papers/2017-attention.pdf#'));
+      assert.ok(te.replacement.includes('|self-attention]]'));
     }
     // Coordinates preserved
     assert.strictEqual(p.textEdits[0].source, 'a.md');
@@ -94,7 +94,7 @@ suite('planRenames', () => {
     assert.strictEqual(p.textEdits.length, 1);
     // Edit targets the NEW .md path (VS Code remaps buffer before our edits)
     assert.strictEqual(p.textEdits[0].source, 'new.md');
-    assert.ok(p.textEdits[0].replacement.startsWith('@pdf[[b.pdf#'));
+    assert.ok(p.textEdits[0].replacement.startsWith('[[b.pdf#'));
   });
 
   test('undo semantics: reverse rename is symmetric', () => {
@@ -104,7 +104,7 @@ suite('planRenames', () => {
     const flipped = refs.map(r => ({ ...r, pdf: 'b.pdf' }));
     const reverse = planRenames([{ oldRel: 'b.pdf', newRel: 'a.pdf' }], flipped);
     assert.strictEqual(reverse.textEdits.length, forward.textEdits.length);
-    assert.ok(reverse.textEdits[0].replacement.startsWith('@pdf[[a.pdf#'));
+    assert.ok(reverse.textEdits[0].replacement.startsWith('[[a.pdf#'));
   });
 
   test('sourceLength=0 falls back to computed token length', () => {

@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { IndexService, parseMarkdownReferences } from '../../src/index/indexService';
+import { IndexService, parseMarkdownReferences, parseWikiReferences } from '../../src/index/indexService';
 import { indexFilePath } from '../../src/index/indexFile';
 import { AnnotationEntry } from '../../src/shared/types';
 
@@ -212,7 +212,7 @@ suite('IndexService', () => {
       const anns = svc.snapshot().annotations;
       assert.strictEqual(anns.length, 1);
       assert.strictEqual(anns[0].pdf, 'papers/attention.pdf');
-      assert.strictEqual(anns[0].anchor, 'page=5&idx=12&off=5&len=40');
+      assert.strictEqual(anns[0].anchor, 'page=5&selection=12,5,12,45');
 
       // Sidecar was deleted
       await assert.rejects(fs.access(sidecar));
@@ -250,6 +250,16 @@ suite('parseMarkdownReferences', () => {
     assert.strictEqual(refs[1].snippet, '');
   });
 
+  test('parses Obsidian-style PDF deep links', () => {
+    const text = 'see [[a.pdf#page=2&selection=4,0,4,11|Attention]] here';
+    const refs = parseMarkdownReferences('notes.md', text);
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].pdf, 'a.pdf');
+    assert.strictEqual(refs[0].page, 2);
+    assert.strictEqual(refs[0].anchor, 'page=2&selection=4,0,4,11');
+    assert.strictEqual(refs[0].snippet, 'Attention');
+  });
+
   test('sourceLength matches the exact token length', () => {
     const token = '@pdf[[a.pdf#page=1&idx=0&off=0&len=5|"xx"]]';
     const refs = parseMarkdownReferences('n.md', `X ${token} Y`);
@@ -259,5 +269,65 @@ suite('parseMarkdownReferences', () => {
   test('skips malformed anchor', () => {
     const text = '@pdf[[a.pdf#bogus|"x"]]';
     assert.deepStrictEqual(parseMarkdownReferences('n.md', text), []);
+  });
+});
+
+suite('parseWikiReferences', () => {
+  test('returns empty array when no wiki links', () => {
+    assert.deepStrictEqual(parseWikiReferences('notes.md', 'hello world'), []);
+  });
+
+  test('parses [[noteName]] syntax', () => {
+    const text = 'see [[my-note]] and [[another]]';
+    const refs = parseWikiReferences('notes.md', text);
+    assert.strictEqual(refs.length, 2);
+    assert.strictEqual(refs[0].targetNote, 'my-note');
+    assert.strictEqual(refs[0].targetSection, '');
+    assert.strictEqual(refs[1].targetNote, 'another');
+  });
+
+  test('parses [[note#section]] syntax', () => {
+    const text = 'link to [[intro#Summary]] here';
+    const refs = parseWikiReferences('notes.md', text);
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].targetNote, 'intro');
+    assert.strictEqual(refs[0].targetSection, 'Summary');
+  });
+
+  test('computes sourceLine and sourceCol', () => {
+    const text = [
+      '# Title',
+      '',
+      'see [[target]] here',
+    ].join('\n');
+    const refs = parseWikiReferences('notes.md', text);
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].sourceLine, 2);
+    assert.strictEqual(refs[0].sourceCol, 4);
+    assert.strictEqual(refs[0].sourceLength, '[[target]]'.length);
+  });
+
+  test('excludes @pdf[[…]] and @code[[…]] patterns', () => {
+    const text = '@pdf[[a.pdf#page=1&idx=0&off=0&len=5|"hi"]] and @code[[src/main.go#L10]] and [[real-wiki]]';
+    const refs = parseWikiReferences('notes.md', text);
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].targetNote, 'real-wiki');
+  });
+
+  test('wiki backlinks via IndexService', async () => {
+    await withTempRepo(async (dir) => {
+      const svc = new IndexService();
+      await svc.init(dir);
+      svc.replaceWikiReferencesForFile('a.md', [
+        { source: 'a.md', sourceLine: 0, sourceCol: 0, sourceLength: 10, targetNote: 'b', targetSection: '' },
+      ]);
+      svc.replaceWikiReferencesForFile('c.md', [
+        { source: 'c.md', sourceLine: 3, sourceCol: 5, sourceLength: 8, targetNote: 'b', targetSection: 'Intro' },
+      ]);
+      const backlinks = svc.getWikiBacklinks('b');
+      assert.strictEqual(backlinks.length, 2);
+      assert.deepStrictEqual(backlinks.map(r => r.source).sort(), ['a.md', 'c.md']);
+      await svc.dispose();
+    });
   });
 });

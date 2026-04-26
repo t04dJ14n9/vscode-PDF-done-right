@@ -1,5 +1,5 @@
 /**
- * Drive a fresh VS Code: dismiss welcome, open sample.pdf, click PaperLink
+ * Drive a fresh VS Code: dismiss welcome, open sample.pdf, click PDF Done Right
  * activity-bar icon, then probe for outline tree items.
  */
 import WebSocket from 'ws';
@@ -68,7 +68,7 @@ async function main(): Promise<void> {
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'P', code: 'KeyP', modifiers: 6, windowsVirtualKeyCode: 80 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'P', code: 'KeyP', modifiers: 6, windowsVirtualKeyCode: 80 });
     await sleep(500);
-    await send('Input.insertText', { text: 'View: Show PaperLink' });
+    await send('Input.insertText', { text: 'View: Show PDF Done Right' });
     await sleep(400);
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });

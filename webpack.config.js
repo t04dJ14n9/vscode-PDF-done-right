@@ -16,6 +16,7 @@ const configs = [
       path: path.resolve(__dirname, 'dist'),
       filename: 'extension.js',
       libraryTarget: 'commonjs2',
+      clean: true,
     },
     externals: {
       vscode: 'commonjs vscode',
@@ -97,7 +98,7 @@ const configs = [
     },
     devtool: 'nosources-source-map',
   },
-  // Markdown editor scaffold webview (browser)
+  // Markdown editor webview (browser) — single bundle, no code-splitting
   {
     name: 'markdown-editor',
     target: 'web',
@@ -106,6 +107,10 @@ const configs = [
     output: {
       path: path.resolve(__dirname, 'dist'),
       filename: 'markdown-editor.js',
+      chunkLoading: false,
+    },
+    optimization: {
+      splitChunks: false,
     },
     resolve: {
       extensions: ['.ts', '.js'],

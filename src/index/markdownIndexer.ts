@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { IndexService, parseMarkdownReferences } from './indexService';
+import { IndexService, parseMarkdownReferences, parseCodeReferences, parseWikiReferences } from './indexService';
 import { log } from '../util/logger';
 import { toPosix } from './indexFile';
 
@@ -46,6 +46,8 @@ export class MarkdownIndexer implements vscode.Disposable {
           if (isMarkdown(uri) && this.underGitRoot(uri)) {
             const rel = toPosix(path.relative(this.gitRoot, uri.fsPath));
             this.indexService.replaceReferencesForFile(rel, []);
+            this.indexService.replaceCodeReferencesForFile(rel, []);
+            this.indexService.replaceWikiReferencesForFile(rel, []);
           }
         }
       }),
@@ -82,6 +84,12 @@ export class MarkdownIndexer implements vscode.Disposable {
 
     const refs = parseMarkdownReferences(rel, text);
     this.indexService.replaceReferencesForFile(rel, refs);
+
+    const codeRefs = parseCodeReferences(rel, text);
+    this.indexService.replaceCodeReferencesForFile(rel, codeRefs);
+
+    const wikiRefs = parseWikiReferences(rel, text);
+    this.indexService.replaceWikiReferencesForFile(rel, wikiRefs);
   }
 
   private underGitRoot(uri: vscode.Uri): boolean {
@@ -112,5 +120,7 @@ function isMarkdown(uri: vscode.Uri): boolean {
 function uniqueSources(svc: IndexService): Set<string> {
   const s = new Set<string>();
   for (const r of svc.snapshot().references) s.add(r.source);
+  for (const r of svc.snapshot().codeReferences) s.add(r.source);
+  for (const r of svc.snapshot().wikiReferences) s.add(r.source);
   return s;
 }

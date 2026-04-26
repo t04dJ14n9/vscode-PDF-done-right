@@ -1,5 +1,5 @@
 /**
- * Click the PaperLink activity-bar icon, take screenshot, inspect sidebar.
+ * Click the PDF Done Right activity-bar icon, take screenshot, inspect sidebar.
  */
 import WebSocket from 'ws';
 
@@ -32,7 +32,7 @@ async function main() {
       ws.send(JSON.stringify({ id: myId, method, params }));
     });
 
-  // Find the PaperLink activity bar icon by aria-label
+  // Find the PDF Done Right activity bar icon by aria-label
   const locate = await send('Runtime.evaluate', {
     expression: `
       (function(){
@@ -51,7 +51,7 @@ async function main() {
   console.log('activity bar items:');
   for (const r of rows) console.log(' ', r);
   const pl = rows.find((r: any) => /paperlink/i.test(r.label));
-  if (!pl) { console.error('no PaperLink action found'); process.exit(2); }
+  if (!pl) { console.error('no PDF Done Right action found'); process.exit(2); }
   console.log('clicking', pl);
 
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pl.x, y: pl.y, button: 'left', clickCount: 1 });

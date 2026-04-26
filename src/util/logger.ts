@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 /**
- * Single OutputChannel for PaperLink. Lazy-created on first use.
+ * Single OutputChannel for PDF Done Right. Lazy-created on first use.
  * Levels are free-form but filtered by `paperlink.debugLogging`.
  */
 class Logger {
@@ -17,7 +17,7 @@ class Logger {
 
   private get ch(): vscode.OutputChannel {
     if (!this.channel) {
-      this.channel = vscode.window.createOutputChannel('PaperLink');
+      this.channel = vscode.window.createOutputChannel('PDF Done Right');
     }
     return this.channel;
   }

@@ -1,6 +1,6 @@
 {
   "name": "vscode-pdf-done-right",
-  "displayName": "vscode-PDF-done-right",
+  "displayName": "PDF Done Right",
   "description": "Bidirectional links between PDF annotations and Markdown notes",
   "version": "0.2.0",
   "publisher": "t04dj14n9",
@@ -23,7 +23,7 @@
     "customEditors": [
       {
         "viewType": "paperlink.pdfViewer",
-        "displayName": "vscode-PDF-done-right PDF Viewer",
+        "displayName": "PDF Done Right PDF Viewer",
         "selector": [
           {
             "filenamePattern": "*.pdf"
@@ -33,19 +33,19 @@
       },
       {
         "viewType": "paperlink.markdownEditor",
-        "displayName": "vscode-PDF-done-right Markdown Editor (preview)",
+        "displayName": "PDF Done Right Markdown Editor",
         "selector": [
           {
             "filenamePattern": "*.md"
           }
         ],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "commands": [
       {
         "command": "paperlink.showAnnotations",
-        "title": "vscode-PDF-done-right: Show All Annotations for Current PDF"
+        "title": "PDF Done Right: Show All Annotations for Current PDF"
       },
       {
         "command": "paperlink.outlineGoToPage",
@@ -53,21 +53,38 @@
       },
       {
         "command": "paperlink.refreshIndex",
-        "title": "vscode-PDF-done-right: Refresh Reference Index"
+        "title": "PDF Done Right: Refresh Reference Index"
+      },
+      {
+        "command": "paperlink.migrateLegacyPdfLinks",
+        "title": "PDF Done Right: Migrate Legacy PDF Links"
+      },
+      {
+        "command": "paperlink.debugMarkdownEditor",
+        "title": "PDF Done Right: Debug Markdown Editor"
       },
       {
         "command": "paperlink.openBacklink",
-        "title": "vscode-PDF-done-right: Open Backlink",
+        "title": "PDF Done Right: Open Backlink",
         "enablement": "false"
       },
       {
         "command": "paperlink.openMarkdownAtLocation",
-        "title": "vscode-PDF-done-right: Open Markdown At Location",
+        "title": "PDF Done Right: Open Markdown At Location",
         "enablement": "false"
       },
       {
         "command": "paperlink.openInMarkdownEditor",
-        "title": "vscode-PDF-done-right: Open In Obsidian-style Editor (preview)"
+        "title": "PDF Done Right: Open In Markdown Editor"
+      },
+      {
+        "command": "paperlink.toggleMarkdownVimMode",
+        "title": "PDF Done Right: Toggle Markdown Vim Mode"
+      },
+      {
+        "command": "paperlink.openCodeAtLocation",
+        "title": "PDF Done Right: Open Code At Location",
+        "enablement": "false"
       },
       {
         "command": "paperlink.prevPage",
@@ -145,13 +162,94 @@
       ]
     },
     "configuration": {
-      "title": "vscode-PDF-done-right",
+      "title": "PDF Done Right",
       "properties": {
         "paperlink.debugLogging": {
           "type": "boolean",
           "default": false,
-          "description": "Emit verbose debug output to the vscode-PDF-done-right output channel."
+          "description": "Emit verbose debug output to the PDF Done Right output channel."
+        },
+        "paperlink.markdown.fontFamily": {
+          "type": "string",
+          "default": "JetBrains Mono, Menlo, Monaco, Courier New, monospace",
+          "description": "Font family for the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.fontSize": {
+          "type": "number",
+          "default": 14,
+          "minimum": 10,
+          "maximum": 28,
+          "description": "Font size (px) for the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.lineHeight": {
+          "type": "number",
+          "default": 1.6,
+          "minimum": 1.0,
+          "maximum": 3.0,
+          "description": "Line height for the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.useVSCodeEditorTypography": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use VS Code editor typography settings (editor.fontFamily, editor.fontSize, editor.lineHeight) for the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.lineNumbers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show line numbers in the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.wordWrap": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable word wrap in the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.tabSize": {
+          "type": "number",
+          "default": 2,
+          "enum": [2, 4, 8],
+          "description": "Tab size in the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.spellcheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable spellcheck in the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.vimMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Vim keybindings in the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.editorTheme": {
+          "type": "string",
+          "default": "inherit",
+          "enum": ["inherit", "light", "dark"],
+          "description": "Theme for the PDF Done Right markdown editor. 'inherit' follows VS Code's color theme."
+        },
+        "paperlink.markdown.hybridRendering": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Obsidian-style live preview (hide markdown syntax on non-cursor lines)."
+        },
+        "paperlink.markdown.codeFenceHiding": {
+          "type": "boolean",
+          "default": true,
+          "description": "Hide code fence markers (```) when cursor is outside the block."
+        },
+        "paperlink.markdown.syntaxHighlighting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable syntax highlighting in the PDF Done Right markdown editor."
+        },
+        "paperlink.markdown.bracketPairColorization": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable bracket pair colorization in the PDF Done Right markdown editor."
         }
+      }
+    },
+    "configurationDefaults": {
+      "workbench.editorAssociations": {
+        "*.md": "paperlink.markdownEditor"
       }
     },
     "markdown.markdownItPlugins": true,
@@ -183,8 +281,21 @@
     "ws": "^8.20.0"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.1",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/lint": "^6.9.5",
+    "@codemirror/search": "^6.6.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.41.1",
     "@embedpdf/engines": "^2.14.0",
     "@embedpdf/models": "^2.14.0",
-    "@embedpdf/pdfium": "^2.14.0"
+    "@embedpdf/pdfium": "^2.14.0",
+    "@lezer/common": "^1.5.2",
+    "@lezer/highlight": "^1.2.3",
+    "@lezer/markdown": "^1.6.3",
+    "@replit/codemirror-vim": "^6.3.0"
   }
 }

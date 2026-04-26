@@ -1,62 +1,320 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import { IndexService } from './index/indexService';
 
 /**
- * Scaffold CustomTextEditorProvider for `*.md`, registered with
- * priority `"option"` so it never steals default opens of markdown files.
+ * CustomTextEditorProvider for `*.md` using a CodeMirror 6 webview.
  *
- * This is a placeholder to reserve the integration point for a future
- * Obsidian-like rich editor (to be ported from `~/Code/mark_pdf_down`).
- * It exposes a documented message protocol that the real editor will
- * implement; today it simply syncs plain text.
+ * Provides an Obsidian-style rich markdown editor with:
+ *   - Live preview (hybrid rendering — hides syntax on non-cursor lines)
+ *   - Wiki-link, @pdf, @code link navigation
+ *   - Inline @pdf link rendering
+ *   - Vim mode (opt-in via setting)
+ *   - All settings via paperlink.markdown.* configuration
  *
- * Protocol stubs (Extension ⇄ Webview):
+ * Protocol (Extension host ⇄ Webview):
  *   host → webview:
  *     { type: 'setText'; text: string }
  *     { type: 'reveal'; line: number; col: number }
+ *     { type: 'setSettings'; settings: Partial<EditorSettings> }
  *   webview → host:
  *     { type: 'ready' }
- *     { type: 'edit'; edits: { line: number; col: number; text: string }[] }
- *     { type: 'getSelection' }
- *     { type: 'replaceSelection'; text: string }
- *     { type: 'insertLinkAtCaret'; link: string }
+ *     { type: 'edit'; text: string }
+ *     { type: 'save' }
+ *     { type: 'openFile'; path: string }
+ *     { type: 'openCodeRef'; path: string; startLine?: number; endLine?: number }
+ *     { type: 'openPdfRef'; pdfPath: string; anchor: string }
+ *     { type: 'openExternal'; url: string }
+ *     { type: 'pasteImage'; mimeType: string; dataUrl: string }
+ *     { type: 'requestImageData'; requestId: string; path: string }
  */
 export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'paperlink.markdownEditor';
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  /** Active webview panels keyed by document URI string */
+  private readonly panels = new Map<string, vscode.WebviewPanel>();
+
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly indexService: IndexService | undefined,
+    private readonly gitRoot: string | undefined,
+  ) {}
+
+  /** Request diagnostic info from the active markdown editor webview */
+  async requestDiagnostic(): Promise<any> {
+    return this._sendAndReceive('diagnostic');
+  }
+
+  /** Request diagnostic from a specific document's webview */
+  async requestDiagnosticForDocument(uri: vscode.Uri): Promise<any> {
+    return this._sendAndReceive('diagnostic', 5000, uri.toString());
+  }
+
+  /** Simulate clicking the first @pdf link in the active markdown editor */
+  async clickTest(): Promise<any> {
+    return this._sendAndReceive('clickTest');
+  }
+
+  private async _sendAndReceive(type: string, timeoutMs = 5000, targetUri?: string): Promise<any> {
+    let panel: vscode.WebviewPanel | undefined;
+
+    if (targetUri) {
+      panel = this.panels.get(targetUri);
+      console.log(`[PDFDR MD] _sendAndReceive targetUri=${targetUri}, panelFound=${!!panel}, panelsKeys=${Array.from(this.panels.keys()).join(', ')}`);
+    } else {
+      const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+      const viewType = (activeTab?.input as any)?.viewType;
+      if (viewType !== MarkdownEditorProvider.viewType) {
+        return { error: 'No active PDF Done Right markdown editor' };
+      }
+      const uriStr = (activeTab?.input as any)?.uri?.toString();
+      panel = uriStr ? this.panels.get(uriStr) : undefined;
+    }
+
+    if (!panel) {
+      return { error: 'No webview panel found for editor' };
+    }
+
+    return new Promise<any>((resolve) => {
+      const timeout = setTimeout(() => resolve({ error: `${type} timeout` }), timeoutMs);
+      const sub = panel!.webview.onDidReceiveMessage((msg: any) => {
+        if (msg?.type === type) {
+          clearTimeout(timeout);
+          sub.dispose();
+          resolve(msg);
+        }
+      });
+      panel!.webview.postMessage({ type });
+    });
+  }
 
   async resolveCustomTextEditor(
     document: vscode.TextDocument,
     webviewPanel: vscode.WebviewPanel,
     _token: vscode.CancellationToken,
   ): Promise<void> {
+    const key = document.uri.toString();
+    this.panels.set(key, webviewPanel);
+    webviewPanel.onDidDispose(() => this.panels.delete(key));
+
     webviewPanel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
     };
     webviewPanel.webview.html = this.getHtml(webviewPanel.webview);
 
-    // Push the current document text to the webview on any change.
-    const updateWebview = () => {
+    // Track whether an edit originated from the webview to avoid echo loops.
+    let ignoreNextChange = false;
+
+    const pushText = () => {
       webviewPanel.webview.postMessage({
         type: 'setText',
         text: document.getText(),
       });
     };
 
-    const changeSub = vscode.workspace.onDidChangeTextDocument(e => {
-      if (e.document.uri.toString() === document.uri.toString()) updateWebview();
-    });
-    webviewPanel.onDidDispose(() => changeSub.dispose());
+    const pushSettings = () => {
+      const cfg = vscode.workspace.getConfiguration('paperlink.markdown');
+      const editorCfg = vscode.workspace.getConfiguration('editor');
+      const vimMode = resolveMarkdownVimMode(cfg);
+      const typography = resolveMarkdownTypography(cfg, editorCfg);
 
-    webviewPanel.webview.onDidReceiveMessage(msg => {
+      webviewPanel.webview.postMessage({
+        type: 'setSettings',
+        settings: {
+          fontFamily: typography.fontFamily,
+          fontSize: typography.fontSize,
+          lineHeight: typography.lineHeight,
+          lineNumbers: cfg.get<boolean>('lineNumbers'),
+          wordWrap: cfg.get<boolean>('wordWrap'),
+          tabSize: cfg.get<number>('tabSize'),
+          spellcheck: cfg.get<boolean>('spellcheck'),
+          vimMode,
+          editorTheme: cfg.get<string>('editorTheme'),
+          hybridRendering: cfg.get<boolean>('hybridRendering'),
+          codeFenceHiding: cfg.get<boolean>('codeFenceHiding'),
+          syntaxHighlighting: cfg.get<boolean>('syntaxHighlighting'),
+          bracketPairColorization: cfg.get<boolean>('bracketPairColorization'),
+        },
+      });
+    };
+
+    const changeSub = vscode.workspace.onDidChangeTextDocument(e => {
+      if (e.document.uri.toString() === document.uri.toString()) {
+        if (ignoreNextChange) {
+          ignoreNextChange = false;
+          return;
+        }
+        pushText();
+      }
+    });
+
+    const settingsSub = vscode.workspace.onDidChangeConfiguration(e => {
+      if (
+        e.affectsConfiguration('paperlink.markdown')
+        || e.affectsConfiguration('editor.fontFamily')
+        || e.affectsConfiguration('editor.fontSize')
+        || e.affectsConfiguration('editor.lineHeight')
+      ) {
+        pushSettings();
+      }
+    });
+
+    webviewPanel.onDidDispose(() => {
+      changeSub.dispose();
+      settingsSub.dispose();
+    });
+
+    webviewPanel.webview.onDidReceiveMessage(async (msg: any) => {
+      const debugLog = vscode.workspace.getConfiguration('paperlink').get<boolean>('debugLogging');
+      if (debugLog) {
+        console.log(`[PDFDR MD] Received message: ${msg?.type}`, msg);
+      }
       switch (msg?.type) {
         case 'ready':
-          updateWebview();
+          console.log('[PDFDR MD] Webview ready — sending text and settings');
+          pushText();
+          pushSettings();
           break;
-        // All other incoming messages are placeholders for the real editor.
-        default:
+
+        case 'error':
+          console.error(`[PDFDR MD] Webview error: ${msg.message} at ${msg.source}:${msg.line}`);
           break;
+
+        case 'diagnostic':
+          console.log(`[PDFDR MD] Diagnostic: ${JSON.stringify(msg, null, 2)}`);
+          break;
+
+        case 'edit': {
+          const newText = msg.text as string;
+          if (newText === document.getText()) break;
+          ignoreNextChange = true;
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(
+            document.uri,
+            new vscode.Range(0, 0, document.lineCount, 0),
+            newText,
+          );
+          await vscode.workspace.applyEdit(edit);
+          break;
+        }
+
+        case 'save':
+          if (document.isDirty) {
+            await document.save();
+          }
+          break;
+
+        case 'openFile': {
+          const filePath = msg.path as string;
+          if (this.gitRoot) {
+            const absPath = vscode.Uri.file(path.join(this.gitRoot, filePath));
+            try {
+              await vscode.workspace.openTextDocument(absPath);
+              await vscode.commands.executeCommand('vscode.open', absPath);
+            } catch {
+              // file may not exist
+            }
+          }
+          break;
+        }
+
+        case 'openCodeRef': {
+          const codePath = msg.path as string;
+          const startLine = msg.startLine as number | undefined;
+          const endLine = msg.endLine as number | undefined;
+          if (this.gitRoot) {
+            const absPath = vscode.Uri.file(path.join(this.gitRoot, codePath));
+            try {
+              const doc = await vscode.workspace.openTextDocument(absPath);
+              const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+              if (startLine && startLine > 0) {
+                const sLine = Math.max(0, startLine - 1);
+                const eLine = endLine && endLine > startLine
+                  ? Math.min(doc.lineCount - 1, endLine - 1)
+                  : sLine;
+                const range = new vscode.Range(sLine, 0, eLine, doc.lineAt(eLine).text.length);
+                editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+                editor.selection = new vscode.Selection(range.start, range.end);
+              }
+            } catch {
+              vscode.commands.executeCommand('revealInExplorer', absPath);
+            }
+          }
+          break;
+        }
+
+        case 'openPdfRef': {
+          const pdfPath = msg.pdfPath as string;
+          const anchor = msg.anchor as string;
+          if (debugLog) {
+            console.log(`[PDFDR MD] openPdfRef: pdfPath=${pdfPath}, anchor=${anchor}, gitRoot=${this.gitRoot}`);
+          }
+          if (this.gitRoot) {
+            await vscode.commands.executeCommand('paperlink.openPdfAtAnchor', { pdfPath, anchor });
+          } else {
+            console.warn('[PDFDR MD] Cannot open PDF ref — no gitRoot');
+          }
+          break;
+        }
+
+        case 'openExternal': {
+          const url = msg.url as string;
+          await vscode.env.openExternal(vscode.Uri.parse(url));
+          break;
+        }
+
+        case 'pasteImage': {
+          if (!this.gitRoot) {
+            console.warn('[PDFDR MD] Cannot paste image — no gitRoot');
+            break;
+          }
+          const mimeType = String(msg.mimeType ?? 'image/png');
+          const dataUrl = String(msg.dataUrl ?? '');
+          const bytes = parseImageDataUrl(dataUrl);
+          if (!bytes) {
+            console.warn('[PDFDR MD] Cannot paste image — invalid data URL');
+            break;
+          }
+
+          const ext = imageExtensionFromMime(mimeType);
+          const assetDir = path.join(this.gitRoot, '.asset');
+          await vscode.workspace.fs.createDirectory(vscode.Uri.file(assetDir));
+
+          const baseName = `Pasted image ${formatImageTimestamp(new Date())}`;
+          let fileName = `${baseName}.${ext}`;
+          let absPath = path.join(assetDir, fileName);
+          let serial = 1;
+          while (await fileExists(absPath)) {
+            fileName = `${baseName}-${serial}.${ext}`;
+            absPath = path.join(assetDir, fileName);
+            serial += 1;
+          }
+
+          await vscode.workspace.fs.writeFile(vscode.Uri.file(absPath), bytes);
+          webviewPanel.webview.postMessage({ type: 'insertText', text: `![[${fileName}]]` });
+          break;
+        }
+
+        case 'requestImageData': {
+          const requestId = String(msg.requestId ?? '');
+          const imagePath = String(msg.path ?? '').trim();
+          const abs = await resolveImagePath(imagePath, document.uri.fsPath, this.gitRoot);
+          if (!requestId) break;
+          if (!abs) {
+            webviewPanel.webview.postMessage({ type: 'imageData', requestId, path: imagePath, dataUrl: null });
+            break;
+          }
+          try {
+            const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
+            const mime = mimeFromPath(abs);
+            const dataUrl = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
+            webviewPanel.webview.postMessage({ type: 'imageData', requestId, path: imagePath, dataUrl });
+          } catch {
+            webviewPanel.webview.postMessage({ type: 'imageData', requestId, path: imagePath, dataUrl: null });
+          }
+          break;
+        }
       }
     });
   }
@@ -74,65 +332,155 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none';
     script-src 'nonce-${nonce}' ${webview.cspSource};
-    style-src 'unsafe-inline' ${webview.cspSource};">
-  <title>PaperLink Markdown Editor</title>
+    style-src 'unsafe-inline' ${webview.cspSource};
+    font-src ${webview.cspSource};
+    img-src ${webview.cspSource} data: https:;">
+  <title>PDF Done Right Editor</title>
   <style>
     html, body {
       height: 100%;
       margin: 0;
-      background: #1e1e1e;
-      color: #cccccc;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 0;
+      background: var(--vscode-editor-background, #1e1e1e);
+      color: var(--vscode-editor-foreground, #cccccc);
+      font-family: var(--vscode-editor-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
     }
-    .placeholder {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      text-align: center;
-      gap: 12px;
-      padding: 40px;
+    #editor {
+      height: 100%;
+      overflow: hidden;
     }
-    .placeholder h1 {
-      font-size: 20px;
-      font-weight: 500;
-      margin: 0;
+    .cm-editor {
+      height: 100%;
     }
-    .placeholder p {
-      opacity: 0.6;
-      font-size: 13px;
-      max-width: 440px;
-      line-height: 1.5;
-    }
-    pre.preview {
-      width: 80%;
-      max-height: 40vh;
+    .cm-scroller {
       overflow: auto;
-      background: #252526;
-      border: 1px solid #3e3e42;
-      border-radius: 4px;
-      padding: 10px 14px;
-      font-family: 'SF Mono', Menlo, Consolas, monospace;
-      font-size: 12px;
-      white-space: pre-wrap;
-      text-align: left;
     }
   </style>
 </head>
 <body>
-  <div class="placeholder">
-    <h1>PaperLink Markdown Editor — coming soon</h1>
-    <p>
-      This is a placeholder. Open markdown files with the default text editor for now.
-      A richer Obsidian-style editor will be ported here in a future release.
-    </p>
-    <pre class="preview" id="preview"></pre>
-  </div>
+  <div id="editor"></div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
   }
+}
+
+export function resolveMarkdownVimMode(
+  cfg: Pick<vscode.WorkspaceConfiguration, 'get'>,
+): boolean {
+  return cfg.get<boolean>('vimMode', false);
+}
+
+export interface MarkdownTypographySettings {
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
+}
+
+export function resolveMarkdownTypography(
+  markdownCfg: Pick<vscode.WorkspaceConfiguration, 'get'>,
+  editorCfg: Pick<vscode.WorkspaceConfiguration, 'get'>,
+): MarkdownTypographySettings {
+  const markdownFontFamily = markdownCfg.get<string>('fontFamily', 'JetBrains Mono, Menlo, Monaco, Courier New, monospace');
+  const markdownFontSize = markdownCfg.get<number>('fontSize', 14);
+  const markdownLineHeight = markdownCfg.get<number>('lineHeight', 1.6);
+  const useVSCodeEditorTypography = markdownCfg.get<boolean>('useVSCodeEditorTypography', true);
+
+  if (!useVSCodeEditorTypography) {
+    return {
+      fontFamily: markdownFontFamily,
+      fontSize: markdownFontSize,
+      lineHeight: markdownLineHeight,
+    };
+  }
+
+  const editorFontFamily = (editorCfg.get<string>('fontFamily', '') || '').trim();
+  const fontFamily = editorFontFamily || markdownFontFamily;
+  const fontSize = editorCfg.get<number>('fontSize', markdownFontSize);
+  const editorLineHeightPx = editorCfg.get<number>('lineHeight', 0);
+  const lineHeight = editorLineHeightPx > 0 && fontSize > 0
+    ? Math.max(1, editorLineHeightPx / fontSize)
+    : markdownLineHeight;
+
+  return { fontFamily, fontSize, lineHeight };
+}
+
+export function formatImageTimestamp(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${y}${m}${d}${hh}${mm}${ss}`;
+}
+
+export function imageExtensionFromMime(mimeType: string): string {
+  const normalized = mimeType.toLowerCase();
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return 'jpg';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('bmp')) return 'bmp';
+  if (normalized.includes('svg')) return 'svg';
+  return 'png';
+}
+
+export function parseImageDataUrl(dataUrl: string): Uint8Array | null {
+  const match = /^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/.exec(dataUrl);
+  if (!match || !match[1]) return null;
+  try {
+    return Buffer.from(match[1], 'base64');
+  } catch {
+    return null;
+  }
+}
+
+async function fileExists(absPath: string): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.file(absPath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveImagePath(imagePath: string, documentPath: string, gitRoot: string | undefined): Promise<string | null> {
+  if (!imagePath) return null;
+  const docDir = path.dirname(documentPath);
+  const candidates: string[] = [];
+  const hasSeparator = imagePath.includes('/') || imagePath.includes('\\');
+
+  if (path.isAbsolute(imagePath)) {
+    candidates.push(imagePath);
+  } else {
+    candidates.push(path.join(docDir, imagePath));
+    if (gitRoot) {
+      candidates.push(path.join(gitRoot, imagePath));
+      if (!hasSeparator) {
+        candidates.push(path.join(gitRoot, '.asset', imagePath));
+        candidates.push(path.join(gitRoot, '.aseet', imagePath)); // legacy typo fallback
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const normalized = path.normalize(candidate);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    if (await fileExists(normalized)) return normalized;
+  }
+  return null;
+}
+
+export function mimeFromPath(absPath: string): string {
+  const ext = path.extname(absPath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.bmp') return 'image/bmp';
+  if (ext === '.svg') return 'image/svg+xml';
+  return 'image/png';
 }
 
 function getNonce(): string {

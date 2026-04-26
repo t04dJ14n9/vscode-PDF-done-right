@@ -3,7 +3,7 @@ import * as path from 'path';
 import { IndexService } from './indexService';
 import { toPosix } from './indexFile';
 import { log } from '../util/logger';
-import { formatPdfLink, PdfAnchor, stringToAnchor, ReferenceEntry } from '../shared/types';
+import { formatPdfLinkFromParts, formatCodeLink, PdfAnchor, stringToAnchor, ReferenceEntry, CodeReferenceEntry } from '../shared/types';
 
 /**
  * Watches `onDidRenameFiles` and propagates the rename through:
@@ -42,8 +42,8 @@ export class FileRenameWatcher implements vscode.Disposable {
     }
     if (renames.length === 0) return;
 
-    const plan = planRenames(renames, this.indexService.snapshot().references);
-    if (plan.textEdits.length === 0 && plan.pdfRenames.length === 0 && plan.mdRenames.length === 0) {
+    const plan = planRenames(renames, this.indexService.snapshot().references, this.indexService.snapshot().codeReferences);
+    if (plan.textEdits.length === 0 && plan.pdfRenames.length === 0 && plan.mdRenames.length === 0 && plan.codeTargetRenames.length === 0) {
       return;
     }
 
@@ -83,9 +83,12 @@ export class FileRenameWatcher implements vscode.Disposable {
     for (const { oldRel, newRel } of plan.mdRenames) {
       this.indexService.renameMarkdownInIndex(oldRel, newRel);
     }
+    for (const { oldRel, newRel } of plan.codeTargetRenames) {
+      this.indexService.renameCodeTargetInIndex(oldRel, newRel);
+    }
 
     log.info(
-      `Rename propagated: ${plan.pdfRenames.length} PDFs, ${plan.mdRenames.length} MDs, ${plan.textEdits.length} token rewrites.`,
+      `Rename propagated: ${plan.pdfRenames.length} PDFs, ${plan.mdRenames.length} MDs, ${plan.codeTargetRenames.length} code targets, ${plan.textEdits.length} token rewrites.`,
     );
   }
 
@@ -114,6 +117,7 @@ export interface RenamePlan {
   textEdits: PlannedTextEdit[];
   pdfRenames: RenamePair[];
   mdRenames: RenamePair[];
+  codeTargetRenames: RenamePair[];
 }
 
 /**
@@ -124,24 +128,29 @@ export interface RenamePlan {
 export function planRenames(
   renames: RenamePair[],
   references: readonly ReferenceEntry[],
+  codeReferences: readonly CodeReferenceEntry[] = [],
 ): RenamePlan {
   const pdfRenames: RenamePair[] = [];
   const mdRenames: RenamePair[] = [];
+  const codeTargetRenames: RenamePair[] = [];
 
   for (const r of renames) {
     if (r.oldRel === r.newRel) continue;
     const ext = r.oldRel.toLowerCase().split('.').pop();
     if (ext === 'pdf') pdfRenames.push(r);
     else if (ext === 'md') mdRenames.push(r);
-    // Other extensions ignored.
+    else codeTargetRenames.push(r);
   }
 
-  if (pdfRenames.length === 0 && mdRenames.length === 0) {
-    return { textEdits: [], pdfRenames: [], mdRenames: [] };
+  if (pdfRenames.length === 0 && mdRenames.length === 0 && codeTargetRenames.length === 0) {
+    return { textEdits: [], pdfRenames: [], mdRenames: [], codeTargetRenames: [] };
   }
 
   // Fast lookup: old PDF path → new PDF path
   const pdfMap = new Map(pdfRenames.map(r => [r.oldRel, r.newRel]));
+
+  // Fast lookup: old code target path → new code target path
+  const codeTargetMap = new Map(codeTargetRenames.map(r => [r.oldRel, r.newRel]));
 
   // If a .md is ALSO being renamed this tick, its edits need to be keyed by
   // the NEW source path because the rename happens before our edits propagate.
@@ -157,24 +166,8 @@ export function planRenames(
     if (!anchor) continue;
 
     const snippet = ref.snippet ?? '';
-    const replacement = formatPdfLink(newPdf, {
-      page: anchor.page,
-      textItemIndex: anchor.textItemIndex,
-      charOffset: anchor.charOffset,
-      length: anchor.length,
-      snippet,
-    });
+    const replacement = formatPdfLinkFromParts(newPdf, ref.anchor, snippet);
 
-    // After applyEdit VS Code's rename-tracking has already moved the file —
-    // but applyEdit runs against the PRE-rename URI. We therefore use the
-    // original source path. If the .md itself was also renamed, VS Code will
-    // have already moved the buffer, so we need to target the NEW path.
-    // In practice VS Code fires a single event with all renames; applyEdit
-    // against `vscode.Uri.file(pathForFile)` is re-resolved by VS Code to the
-    // current document, so using old path is safe as long as the document has
-    // been remapped. To play it safest, we target whichever path is current
-    // from the index's point of view — which is still `ref.source` because
-    // IndexService.renameMarkdownInIndex hasn't been called yet.
     const source = mdMap.get(ref.source) ?? ref.source;
 
     textEdits.push({
@@ -186,12 +179,69 @@ export function planRenames(
     });
   }
 
-  return { textEdits, pdfRenames, mdRenames };
+  // Generate text edits for @code[[…]] tokens referencing renamed code targets.
+  for (const cref of codeReferences) {
+    const newTarget = codeTargetMap.get(cref.targetPath);
+    if (!newTarget) continue;
+
+    // Also resolve relative targetPath via source directory
+    let matchedOld: string | undefined;
+    for (const [oldRel] of codeTargetMap) {
+      if (cref.targetPath === oldRel) { matchedOld = oldRel; break; }
+      // Check relative-to-source resolution
+      const dir = dirnamePosix(cref.source);
+      if (dir && joinPosix(dir, cref.targetPath) === oldRel) { matchedOld = oldRel; break; }
+    }
+    if (!matchedOld) continue;
+    const newTargetPath = codeTargetMap.get(matchedOld)!;
+
+    const replacement = formatCodeLink(newTargetPath, cref.startLine || undefined, cref.endLine > cref.startLine ? cref.endLine : undefined, cref.snippet || undefined);
+
+    const source = mdMap.get(cref.source) ?? cref.source;
+
+    textEdits.push({
+      source,
+      line: cref.sourceLine,
+      col: cref.sourceCol,
+      oldLength: cref.sourceLength || estimateCodeTokenLength(cref.targetPath, cref.startLine, cref.endLine, cref.snippet),
+      replacement,
+    });
+  }
+
+  return { textEdits, pdfRenames, mdRenames, codeTargetRenames };
 }
 
 /** Fallback when `sourceLength` is 0 (pre-v2 index). */
 function estimateTokenLength(pdf: string, anchor: string, snippet: string): number {
-  // `@pdf[[${pdf}#${anchor}|"${snippet ≤ 60 chars}"]]`
+  // `[[${pdf}#${anchor}|${snippet ≤ 60 chars}]]`
   const snip = snippet.length > 60 ? snippet.substring(0, 57) + '...' : snippet;
-  return `@pdf[[${pdf}#${anchor}|"${snip}"]]`.length;
+  return `[[${pdf}#${anchor}${snip ? `|${snip}` : ''}]]`.length;
+}
+
+/** Fallback when `sourceLength` is 0 for code references. */
+function estimateCodeTokenLength(targetPath: string, startLine: number, endLine: number, snippet: string): number {
+  const loc = startLine
+    ? endLine > startLine
+      ? `#L${startLine}-L${endLine}`
+      : `#L${startLine}`
+    : '';
+  const snip = snippet.length > 60 ? snippet.substring(0, 57) + '...' : snippet;
+  return `@code[[${targetPath}${loc}${snip ? `|"${snip}"` : ''}]]`.length;
+}
+
+function dirnamePosix(p: string): string {
+  const i = p.lastIndexOf('/');
+  return i >= 0 ? p.slice(0, i) : '';
+}
+
+function joinPosix(dir: string, rel: string): string {
+  if (rel.startsWith('/')) rel = rel.slice(1);
+  const combined = dir ? `${dir}/${rel}` : rel;
+  const parts: string[] = [];
+  for (const seg of combined.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (parts.length) parts.pop(); continue; }
+    parts.push(seg);
+  }
+  return parts.join('/');
 }

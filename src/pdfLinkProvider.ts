@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
-import { PDF_LINK_REGEX, stringToAnchor } from './shared/types';
+import { findPdfLinkMatches, CODE_LINK_REGEX, stringToAnchor } from './shared/types';
 
 /**
- * DocumentLinkProvider that detects @pdf[[path/to/file.pdf#anchor|"snippet"]]
- * patterns in markdown files and makes them clickable.
+ * DocumentLinkProvider that detects legacy and Obsidian-style PDF links in
+ * markdown files and makes them clickable.
  */
 export class PdfLinkProvider implements vscode.DocumentLinkProvider {
   provideDocumentLinks(
@@ -13,14 +13,10 @@ export class PdfLinkProvider implements vscode.DocumentLinkProvider {
     const links: vscode.DocumentLink[] = [];
     const text = document.getText();
 
-    // Reset the regex state
-    const regex = new RegExp(PDF_LINK_REGEX.source, PDF_LINK_REGEX.flags);
-    let match: RegExpExecArray | null;
-
-    while ((match = regex.exec(text)) !== null) {
-      const fullMatch = match[0];
-      const pdfRelPath = match[1]; // e.g., "papers/attention.pdf"
-      const anchorStr = match[2]; // e.g., "page=5&idx=12&off=5&len=40"
+    for (const match of findPdfLinkMatches(text)) {
+      const fullMatch = match.fullMatch;
+      const pdfRelPath = match.pdfPath;
+      const anchorStr = match.anchor;
 
       const startPos = document.positionAt(match.index);
       const endPos = document.positionAt(match.index + fullMatch.length);
@@ -35,6 +31,36 @@ export class PdfLinkProvider implements vscode.DocumentLinkProvider {
 
       const link = new vscode.DocumentLink(range, commandUri);
       link.tooltip = `Open PDF: ${pdfRelPath} (page ${stringToAnchor(anchorStr)?.page || '?'})`;
+      links.push(link);
+    }
+
+    // @code[[…]] links
+    const codeRegex = new RegExp(CODE_LINK_REGEX.source, CODE_LINK_REGEX.flags);
+    let codeMatch: RegExpExecArray | null;
+
+    while ((codeMatch = codeRegex.exec(text)) !== null) {
+      const fullMatch = codeMatch[0];
+      const codeRelPath = codeMatch[1]; // e.g., "src/main.go"
+      const startLine = codeMatch[2]; // e.g., "12"
+      const endLine = codeMatch[3]; // e.g., "34"
+
+      const startPos = document.positionAt(codeMatch.index);
+      const endPos = document.positionAt(codeMatch.index + fullMatch.length);
+      const range = new vscode.Range(startPos, endPos);
+
+      const commandUri = vscode.Uri.parse(
+        `command:paperlink.openCodeAtLocation?${encodeURIComponent(
+          JSON.stringify({
+            targetPath: codeRelPath,
+            startLine: startLine ? parseInt(startLine) : 0,
+            endLine: endLine ? parseInt(endLine) : 0,
+            snippet: codeMatch[4] || '',
+          })
+        )}`
+      );
+
+      const link = new vscode.DocumentLink(range, commandUri);
+      link.tooltip = `Open code: ${codeRelPath}${startLine ? ` (line ${startLine})` : ''}`;
       links.push(link);
     }
 

@@ -3,11 +3,15 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import {
   AnnotationEntry,
+  CodeReferenceEntry,
   IndexFile,
   LegacyAnnotationStore,
   PdfAnchor,
-  PDF_LINK_REGEX,
+  findPdfLinkMatches,
+  CODE_LINK_REGEX,
+  WIKI_LINK_REGEX,
   ReferenceEntry,
+  WikiReferenceEntry,
   anchorToString,
   stringToAnchor,
 } from '../shared/types';
@@ -24,7 +28,7 @@ import {
 import { log } from '../util/logger';
 
 /**
- * In-memory source of truth for PaperLink.
+ * In-memory source of truth for PDF Done Right.
  * Persists to `<gitRoot>/.paperlink/index.json` (debounced).
  *
  * Two maps are derived for O(1) lookup:
@@ -48,6 +52,8 @@ export class IndexService {
   private bySource = new Map<string, ReferenceEntry[]>();
   private byTargetPdf = new Map<string, ReferenceEntry[]>();
   private annotationByKey = new Map<string, AnnotationEntry>();
+  private byCodeTarget = new Map<string, CodeReferenceEntry[]>();
+  private byWikiTarget = new Map<string, WikiReferenceEntry[]>();
 
   private readonly _onDidChange = new vscode.EventEmitter<IndexChangeEvent>();
   readonly onDidChange = this._onDidChange.event;
@@ -181,15 +187,15 @@ export class IndexService {
   /**
    * Backlinks for the given file (PDF or .md):
    *   • For a PDF target: every .md reference pointing at any passage in it.
-   *   • For a .md target: every other .md that references this .md — currently
-   *     empty because `@pdf[[…]]` only targets PDFs. Kept for symmetry + future
-   *     wiki-link support.
+   *   • For a .md target: every other .md that has a [[wikilink]] pointing at
+   *     this note (matched by note name = basename without extension).
    */
   getBacklinks(fileRel: string): ReferenceEntry[] {
     const p = toPosix(fileRel);
     if (p.toLowerCase().endsWith('.pdf')) {
       return this.index.references.filter(r => refMatchesTarget(r, p));
     }
+    // For .md files, return empty — wiki backlinks are retrieved via getWikiBacklinks().
     return [];
   }
 
@@ -199,7 +205,93 @@ export class IndexService {
     if (p.toLowerCase().endsWith('.md')) {
       return this.bySource.get(p) ?? [];
     }
+    // PDFs are targets, not sources for @pdf references.
     return [];
+  }
+
+  /** Forward links from a PDF: annotations that mark passages in this PDF. */
+  getAnnotationsAsForwardLinks(pdfRel: string): AnnotationEntry[] {
+    const p = toPosix(pdfRel);
+    return this.index.annotations.filter(a => a.pdf === p);
+  }
+
+  // ─── Code Reference CRUD ──────────────────────────────────────────────────
+
+  /** Replace the set of code references whose source === `source`. */
+  replaceCodeReferencesForFile(source: string, refs: CodeReferenceEntry[]): boolean {
+    const src = toPosix(source);
+    const kept: CodeReferenceEntry[] = [];
+    let removed = 0;
+    for (const r of this.index.codeReferences) {
+      if (r.source === src) removed++;
+      else kept.push(r);
+    }
+    const normRefs = refs.map(r => ({
+      ...r,
+      source: src,
+      targetPath: toPosix(r.targetPath),
+    }));
+    const changed = removed > 0 || normRefs.length > 0;
+    this.index.codeReferences = [...kept, ...normRefs];
+    this.rebuildIndexes();
+    if (changed) {
+      this.scheduleFlush();
+      const touchedTargets = new Set<string>();
+      for (const r of normRefs) touchedTargets.add(r.targetPath);
+      this._onDidChange.fire({
+        changedFiles: [src, ...touchedTargets],
+      });
+    }
+    return changed;
+  }
+
+  /** All code references targeting this file/folder. */
+  getCodeBacklinks(targetRel: string): CodeReferenceEntry[] {
+    const target = toPosix(targetRel);
+    return this.index.codeReferences.filter(r => codeRefMatchesTarget(r, target));
+  }
+
+  /** Outgoing code references from this .md file. */
+  getCodeOutgoing(sourceRel: string): CodeReferenceEntry[] {
+    const src = toPosix(sourceRel);
+    return this.index.codeReferences.filter(r => r.source === src);
+  }
+
+  // ─── Wiki Reference CRUD ──────────────────────────────────────────────────
+
+  /** Replace the set of wiki references whose source === `source`. */
+  replaceWikiReferencesForFile(source: string, refs: WikiReferenceEntry[]): boolean {
+    const src = toPosix(source);
+    const kept: WikiReferenceEntry[] = [];
+    let removed = 0;
+    for (const r of this.index.wikiReferences) {
+      if (r.source === src) removed++;
+      else kept.push(r);
+    }
+    const normRefs = refs.map(r => ({ ...r, source: src }));
+    const changed = removed > 0 || normRefs.length > 0;
+    this.index.wikiReferences = [...kept, ...normRefs];
+    this.rebuildIndexes();
+    if (changed) {
+      this.scheduleFlush();
+      const touchedTargets = new Set<string>();
+      for (const r of normRefs) touchedTargets.add(r.targetNote);
+      this._onDidChange.fire({
+        changedFiles: [src, ...touchedTargets],
+      });
+    }
+    return changed;
+  }
+
+  /** All wiki references targeting this note name. */
+  getWikiBacklinks(noteName: string): WikiReferenceEntry[] {
+    return this.index.wikiReferences.filter(r => r.targetNote === noteName);
+  }
+
+  /** Outgoing wiki references from this .md file. */
+  getWikiOutgoing(sourceRel: string): WikiReferenceEntry[] {
+    const src = toPosix(sourceRel);
+    return this.index.wikiReferences.filter(r => r.source === src);
   }
 
   // ─── Rename handling (no text rewriting — caller does WorkspaceEdit) ─────
@@ -237,6 +329,29 @@ export class IndexService {
     return changed;
   }
 
+  /** Update `targetPath` in code references from `oldRel` → `newRel`. */
+  renameCodeTargetInIndex(oldRel: string, newRel: string): boolean {
+    const oldP = toPosix(oldRel);
+    const newP = toPosix(newRel);
+    if (oldP === newP) return false;
+    let changed = false;
+    const touched = new Set<string>();
+
+    for (const r of this.index.codeReferences) {
+      if (codeRefMatchesTarget(r, oldP)) {
+        r.targetPath = newP;
+        changed = true;
+        touched.add(r.source);
+      }
+    }
+    if (changed) {
+      this.rebuildIndexes();
+      this.scheduleFlush();
+      this._onDidChange.fire({ changedFiles: [oldP, newP, ...touched] });
+    }
+    return changed;
+  }
+
   /** Rewrite `source` field on references from `oldRel` → `newRel`. */
   renameMarkdownInIndex(oldRel: string, newRel: string): boolean {
     const oldP = toPosix(oldRel);
@@ -244,6 +359,18 @@ export class IndexService {
     if (oldP === newP) return false;
     let changed = false;
     for (const r of this.index.references) {
+      if (r.source === oldP) {
+        r.source = newP;
+        changed = true;
+      }
+    }
+    for (const r of this.index.codeReferences) {
+      if (r.source === oldP) {
+        r.source = newP;
+        changed = true;
+      }
+    }
+    for (const r of this.index.wikiReferences) {
       if (r.source === oldP) {
         r.source = newP;
         changed = true;
@@ -304,6 +431,8 @@ export class IndexService {
     this.bySource.clear();
     this.byTargetPdf.clear();
     this.annotationByKey.clear();
+    this.byCodeTarget.clear();
+    this.byWikiTarget.clear();
 
     for (const r of this.index.references) {
       const kAnchor = `${r.pdf}|${r.anchor}`;
@@ -313,6 +442,12 @@ export class IndexService {
     }
     for (const a of this.index.annotations) {
       this.annotationByKey.set(annotationKey(a), a);
+    }
+    for (const r of this.index.codeReferences) {
+      pushToMap(this.byCodeTarget, r.targetPath, r);
+    }
+    for (const r of this.index.wikiReferences) {
+      pushToMap(this.byWikiTarget, r.targetNote, r);
     }
   }
 
@@ -396,6 +531,17 @@ function refMatchesTarget(r: ReferenceEntry, target: string): boolean {
   return false;
 }
 
+/**
+ * Same flexible path matching as `refMatchesTarget`, but for code references
+ * comparing `targetPath` against `target`.
+ */
+function codeRefMatchesTarget(r: CodeReferenceEntry, target: string): boolean {
+  if (r.targetPath === target) return true;
+  const dir = dirnamePosix(r.source);
+  if (dir && joinPosix(dir, r.targetPath) === target) return true;
+  return false;
+}
+
 function dirnamePosix(p: string): string {
   const i = p.lastIndexOf('/');
   return i >= 0 ? p.slice(0, i) : '';
@@ -428,8 +574,6 @@ export function parseMarkdownReferences(
   text: string,
 ): ReferenceEntry[] {
   const refs: ReferenceEntry[] = [];
-  const regex = new RegExp(PDF_LINK_REGEX.source, PDF_LINK_REGEX.flags);
-  let match: RegExpExecArray | null;
 
   // Build line-offset table once.
   const lineOffsets: number[] = [0];
@@ -437,11 +581,11 @@ export function parseMarkdownReferences(
     if (text.charCodeAt(i) === 10 /* \n */) lineOffsets.push(i + 1);
   }
 
-  while ((match = regex.exec(text)) !== null) {
-    const full = match[0];
-    const pdfRelLink = match[1];
-    const anchorStr = match[2];
-    const snippet = match[3] ?? '';
+  for (const match of findPdfLinkMatches(text)) {
+    const full = match.fullMatch;
+    const pdfRelLink = match.pdfPath;
+    const anchorStr = match.anchor;
+    const snippet = match.snippet ?? '';
     const anchor = stringToAnchor(anchorStr) as PdfAnchor | null;
     if (!anchor) continue;
 
@@ -460,6 +604,108 @@ export function parseMarkdownReferences(
       page: anchor.page,
       anchor: anchorStr,
       snippet,
+    });
+  }
+  return refs;
+}
+
+/**
+ * Parse a markdown file's text content into code reference entries.
+ * Exported so both `MarkdownIndexer` (on save) and the initial full scan can
+ * share the exact same parse logic.
+ */
+export function parseCodeReferences(
+  sourceRelPosix: string,
+  text: string,
+): CodeReferenceEntry[] {
+  const refs: CodeReferenceEntry[] = [];
+  const regex = new RegExp(CODE_LINK_REGEX.source, CODE_LINK_REGEX.flags);
+  let match: RegExpExecArray | null;
+
+  // Build line-offset table once.
+  const lineOffsets: number[] = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10 /* \n */) lineOffsets.push(i + 1);
+  }
+
+  while ((match = regex.exec(text)) !== null) {
+    const full = match[0];
+    const targetPath = match[1];
+    const startLine = match[2] ? parseInt(match[2], 10) : 0;
+    const endLine = match[3] ? parseInt(match[3], 10) : 0;
+    const snippet = match[4] ?? '';
+
+    // Guard: reject paths that contain @code[[, newlines, or brackets.
+    if (/@code\[\[|[\n\r\[\]]/.test(targetPath)) continue;
+
+    // Folder refs ending with '/' can't have line ranges.
+    if (targetPath.endsWith('/') && (startLine > 0 || endLine > 0)) continue;
+
+    const { line, col } = offsetToLineCol(match.index, lineOffsets);
+    refs.push({
+      source: sourceRelPosix,
+      sourceLine: line,
+      sourceCol: col,
+      sourceLength: full.length,
+      targetPath: toPosix(targetPath),
+      startLine,
+      endLine,
+      snippet,
+    });
+  }
+  return refs;
+}
+
+/**
+ * Parse a markdown file's text content into wiki reference entries.
+ * Matches [[noteName]] and [[noteName#section]] syntax.
+ * Excludes @pdf[[…]] and @code[[…]] patterns (those are separate link types).
+ */
+export function parseWikiReferences(
+  sourceRelPosix: string,
+  text: string,
+): WikiReferenceEntry[] {
+  const refs: WikiReferenceEntry[] = [];
+
+  // Build line-offset table once.
+  const lineOffsets: number[] = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10 /* \n */) lineOffsets.push(i + 1);
+  }
+
+  const regex = new RegExp(WIKI_LINK_REGEX.source, WIKI_LINK_REGEX.flags);
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    const full = match[0];
+    const noteName = (match[1] ?? '').trim();
+    const section = match[2]?.trim() ?? '';
+
+    // Skip empty note names
+    if (!noteName) continue;
+
+    // Skip if this is inside an @pdf[[…]] or @code[[…]] token.
+    // The wiki-link regex matches `[[…]]` starting at the first `[`, so the
+    // prefix will be `@pdf` or `@code` (without the opening bracket) when the
+    // match is inside an @pdf/@code token.
+    const matchStart = match.index;
+    if (matchStart >= 5) {
+      const prefix = text.slice(Math.max(0, matchStart - 6), matchStart);
+      if (/@pdf\[?$/.test(prefix) || /@code\[?$/.test(prefix)) continue;
+    }
+
+    // Obsidian/PDF++-style PDF links are plain [[...]] tokens; they must not
+    // be indexed as wiki-note links.
+    if (/\.pdf$/i.test(noteName)) continue;
+
+    const { line, col } = offsetToLineCol(match.index, lineOffsets);
+    refs.push({
+      source: sourceRelPosix,
+      sourceLine: line,
+      sourceCol: col,
+      sourceLength: full.length,
+      targetNote: noteName,
+      targetSection: section,
     });
   }
   return refs;

@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { AnnotationEntry, IndexFile, ReferenceEntry } from '../shared/types';
+import { AnnotationEntry, CodeReferenceEntry, IndexFile, ReferenceEntry, WikiReferenceEntry } from '../shared/types';
 
 /**
  * Read / write `<gitRoot>/.paperlink/index.json`.
@@ -22,7 +22,7 @@ export const INDEX_FILENAME = 'index.json';
 
 /** The empty index written on first initialization. */
 export function emptyIndex(): IndexFile {
-  return { version: 2, annotations: [], references: [] };
+  return { version: 4, annotations: [], references: [], codeReferences: [], wikiReferences: [] };
 }
 
 /** Read `index.json` from disk; returns an empty index if missing / corrupt. */
@@ -106,6 +106,12 @@ export function normalize(input: Partial<IndexFile>): IndexFile {
   const references = Array.isArray(input.references)
     ? input.references.filter(isReferenceEntry).map(normalizeReference)
     : [];
+  const codeReferences = Array.isArray(input.codeReferences)
+    ? input.codeReferences.filter(isCodeReferenceEntry).map(normalizeCodeReference)
+    : [];
+  const wikiReferences = Array.isArray(input.wikiReferences)
+    ? input.wikiReferences.filter(isWikiReferenceEntry).map(normalizeWikiReference)
+    : [];
 
   // Dedupe annotations by (pdf, anchor). Later wins.
   const annMap = new Map<string, AnnotationEntry>();
@@ -121,7 +127,21 @@ export function normalize(input: Partial<IndexFile>): IndexFile {
   }
   const refSorted = [...refMap.values()].sort(compareReferences);
 
-  return { version: 2, annotations: annSorted, references: refSorted };
+  // Dedupe code references by (source, sourceLine, sourceCol). Later wins.
+  const codeRefMap = new Map<string, CodeReferenceEntry>();
+  for (const r of codeReferences) {
+    codeRefMap.set(`${r.source}|${r.sourceLine}|${r.sourceCol}`, r);
+  }
+  const codeRefSorted = [...codeRefMap.values()].sort(compareCodeReferences);
+
+  // Dedupe wiki references by (source, sourceLine, sourceCol). Later wins.
+  const wikiRefMap = new Map<string, WikiReferenceEntry>();
+  for (const r of wikiReferences) {
+    wikiRefMap.set(`${r.source}|${r.sourceLine}|${r.sourceCol}`, r);
+  }
+  const wikiRefSorted = [...wikiRefMap.values()].sort(compareWikiReferences);
+
+  return { version: 4, annotations: annSorted, references: refSorted, codeReferences: codeRefSorted, wikiReferences: wikiRefSorted };
 }
 
 function compareAnnotations(a: AnnotationEntry, b: AnnotationEntry): number {
@@ -160,6 +180,17 @@ function isReferenceEntry(v: any): v is ReferenceEntry {
   );
 }
 
+function isCodeReferenceEntry(v: any): v is CodeReferenceEntry {
+  return (
+    v &&
+    typeof v === 'object' &&
+    typeof v.source === 'string' &&
+    typeof v.targetPath === 'string' &&
+    typeof v.sourceLine === 'number' &&
+    typeof v.sourceCol === 'number'
+  );
+}
+
 function normalizeAnnotation(a: AnnotationEntry): AnnotationEntry {
   return {
     pdf: toPosix(a.pdf),
@@ -182,6 +213,55 @@ function normalizeReference(r: ReferenceEntry): ReferenceEntry {
     anchor: r.anchor,
     snippet: typeof r.snippet === 'string' ? r.snippet : '',
   };
+}
+
+function compareCodeReferences(a: CodeReferenceEntry, b: CodeReferenceEntry): number {
+  if (a.source !== b.source) return a.source < b.source ? -1 : 1;
+  if (a.sourceLine !== b.sourceLine) return a.sourceLine - b.sourceLine;
+  if (a.sourceCol !== b.sourceCol) return a.sourceCol - b.sourceCol;
+  return 0;
+}
+
+function normalizeCodeReference(r: CodeReferenceEntry): CodeReferenceEntry {
+  return {
+    source: toPosix(r.source),
+    sourceLine: r.sourceLine | 0,
+    sourceCol: r.sourceCol | 0,
+    sourceLength: typeof r.sourceLength === 'number' ? r.sourceLength | 0 : 0,
+    targetPath: toPosix(r.targetPath),
+    startLine: r.startLine | 0,
+    endLine: r.endLine | 0,
+    snippet: typeof r.snippet === 'string' ? r.snippet : '',
+  };
+}
+
+function isWikiReferenceEntry(v: any): v is WikiReferenceEntry {
+  return (
+    v &&
+    typeof v === 'object' &&
+    typeof v.source === 'string' &&
+    typeof v.targetNote === 'string' &&
+    typeof v.sourceLine === 'number' &&
+    typeof v.sourceCol === 'number'
+  );
+}
+
+function normalizeWikiReference(r: WikiReferenceEntry): WikiReferenceEntry {
+  return {
+    source: toPosix(r.source),
+    sourceLine: r.sourceLine | 0,
+    sourceCol: r.sourceCol | 0,
+    sourceLength: typeof r.sourceLength === 'number' ? r.sourceLength | 0 : 0,
+    targetNote: r.targetNote,
+    targetSection: typeof r.targetSection === 'string' ? r.targetSection : '',
+  };
+}
+
+function compareWikiReferences(a: WikiReferenceEntry, b: WikiReferenceEntry): number {
+  if (a.source !== b.source) return a.source < b.source ? -1 : 1;
+  if (a.sourceLine !== b.sourceLine) return a.sourceLine - b.sourceLine;
+  if (a.sourceCol !== b.sourceCol) return a.sourceCol - b.sourceCol;
+  return 0;
 }
 
 /** Convert Windows back-slashes to POSIX forward-slashes. */

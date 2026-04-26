@@ -1,4 +1,12 @@
 node_modules/
-dist/
+dist/src/
+dist/*.map
 *.vsix
 .vscode-test/
+src/
+test/
+test-workspace/
+webview-src/
+out/
+*.md
+!README.md

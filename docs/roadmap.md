@@ -1,21 +1,26 @@
 # Roadmap
 
-## Current Status (v0.1.0)
+## Current Status (v0.2.0)
 
-Minimal viable extension: PDF viewer with bidirectional markdown linking.
+Knowledge management VS Code extension with PDF + code linking and CM6 markdown editor.
 
 - [x] PDF rendering via PDFium WASM (HiDPI, sharp text)
 - [x] Text selection with stable anchoring
 - [x] `@pdf[[...]]` link syntax in markdown (editor + preview)
-- [x] Bidirectional navigation (markdown -> PDF, PDF -> markdown)
-- [x] Annotation sidecar storage (.paperlink.json)
+- [x] `@code[[path#L1-L2|"snippet"]]` code reference links
+- [x] Bidirectional navigation (markdown → PDF/code, PDF → markdown)
+- [x] Shared JSON index at `.paperlink/index.json` (schema v3)
 - [x] PDF outline/bookmarks in Explorer sidebar
+- [x] Backlinks + Forward Links panels in Explorer
+- [x] CodeMirror 6 markdown editor with Obsidian-style live preview
 - [x] Selection toolbar (Copy Link / Insert in Note)
-- [x] Integration test suite (8 tests)
+- [x] File rename propagation (PDFs, markdown, code targets)
+- [x] All settings via VS Code native configuration (`paperlink.markdown.*`)
+- [x] Integration test suite (50 tests)
 
 ## Short Term
 
-### v0.2 -- Polish & Usability
+### v0.3 — Polish & PDF Usability
 
 - [ ] Auto-zoom to content area (ignore blank margins), especially useful for laptop screens
 - [ ] Persistent scroll position and zoom level (restore on reopen)
@@ -25,42 +30,50 @@ Minimal viable extension: PDF viewer with bidirectional markdown linking.
 - [ ] Page thumbnails sidebar
 - [ ] Better annotation management (delete, edit color, list all across workspace)
 
-### v0.3 -- Cloud Sync & Storage
+### v0.4 — Code Reference Enhancements
 
-- [ ] WebDAV sync support (compatible with Zotero's WebDAV)
-- [ ] Dropbox / Google Drive / iCloud integration via their APIs
-- [ ] Conflict resolution for annotation sidecar files
+- [ ] Relative path resolution for `@code[[…]]` links (e.g. `./utils/helper.go`)
+- [ ] Code reference autocomplete (suggest workspace files on `@code[[` trigger)
+- [ ] Folder hover preview (show file tree for `@code[[path/to/folder/]]`)
+- [ ] Git blame integration for code reference lines
+- [ ] Stale/broken code reference detection in CLI
+
+### v0.5 — CLI Tool
+
+- [ ] `paperlink index verify` — check index integrity, detect broken references
+- [ ] `paperlink index rebuild` — full reindex from workspace scan
+- [ ] `paperlink links list --broken` — list all broken @pdf/@code references
+- [ ] `paperlink stats` — summary of annotations, references, code refs
+- [ ] `paperlink rename <old> <new>` — propagate renames through index + markdown
+- [ ] `paperlink export` — export index as markdown summary
+- [ ] Ship as standalone binary via `npx` or `go build`
 
 ## Medium Term
 
-### v0.4 -- AI Knowledge Base
+### v0.6 — Advanced Annotations & Export
 
-- [ ] Vector database (ChromaDB) for document embeddings
-- [ ] Automatic embedding generation on PDF import
-- [ ] AI chat interface for querying across papers
-- [ ] "Ask about this selection" context action
-- [ ] Agent-generated summaries per paper and per section
-
-### v0.5 -- Advanced Annotations
-
-- [ ] Handwriting / Apple Pencil support (for Capacitor mobile build)
-- [ ] Freeform ink annotations on PDF pages
 - [ ] Highlight colors and categories
 - [ ] Export annotations as markdown summary
+- [ ] Annotation tagging (e.g. "important", "follow-up")
+- [ ] Batch annotation operations
+
+### v0.7 — Knowledge Graph
+
+- [ ] Visual graph view (D3/Cytoscape) showing file ↔ annotation ↔ reference relationships
+- [ ] Search across all indexed content (full-text + anchor snippets)
+- [ ] Tag-based navigation across PDFs and notes
+- [ ] Orphan detection (notes with no references, unlinked PDFs)
 
 ## Long Term
 
-### v1.0 -- Full Desktop App
+### v1.0 — Cross-Platform Knowledge System
 
-If the VS Code extension proves the concept, consider building a standalone app:
-
-- [ ] Vue + Electron + Capacitor for desktop and mobile
-- [ ] EmbedPDF component library (SelectionLayer, AnnotationLayer, Scroller) for the full app
-- [ ] Plugin system (Vim mode, custom storage backends)
+- [ ] Mobile app (tablet + phone) via Capacitor/React Native
+- [ ] Git-synced knowledge base (index + notes in repo, no cloud services needed)
+- [ ] Video reference support (`@video[[path#timestamp|"snippet"]]`)
 - [ ] Reference management (arXiv one-click download, citation graph)
-- [ ] NotebookLM-style knowledge base with local agent
-- [ ] CLI tool mirroring all GUI functionality
+- [ ] Shared library extraction (anchor format, index schema, link syntax) for reuse in mobile/CLI
 
 ### Architecture Note
 
-The current extension's core logic (anchor format, annotation storage, link syntax) is engine-agnostic and can be extracted into a shared library. The PDFium WASM engine and the annotation data format work identically in Electron, Capacitor, and VS Code webviews.
+The extension's core logic (anchor format, index storage, link syntax) is engine-agnostic and can be extracted into a shared library. The PDFium WASM engine, the CM6 editor, and the annotation data format work identically in Electron, Capacitor, and VS Code webviews. The CLI tool operates on the same `.paperlink/index.json` without any VS Code dependency.

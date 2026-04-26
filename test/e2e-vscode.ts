@@ -1,5 +1,5 @@
 /**
- * E2E test for PaperLink: connects to VS Code via CDP, opens sample.pdf,
+ * E2E test for PDF Done Right: connects to VS Code via CDP, opens sample.pdf,
  * then inspects the webview to verify rendering.
  */
 
@@ -108,7 +108,7 @@ async function main() {
   console.log('Screenshot: 01-pdf-opened.png');
 
   // Step 3: Get CDP targets and find our webview
-  console.log('\n--- Step 3: Find PaperLink webview ---');
+  console.log('\n--- Step 3: Find PDF Done Right webview ---');
   const resp = await fetch('http://localhost:9222/json');
   const targets: any[] = await resp.json();
 
@@ -195,7 +195,7 @@ async function main() {
           console.log('\n  Inner iframe content:', JSON.stringify(innerCheck, null, 2));
 
           if (innerCheck.hasPdfContainer || innerCheck.hasCanvas) {
-            console.log('\n  🎉 FOUND PaperLink PDF viewer inside inner iframe!');
+            console.log('\n  🎉 FOUND PDF Done Right PDF viewer inside inner iframe!');
 
             // Get detailed rendering info
             const detail = await cdpEval(wsUrl, `
@@ -239,7 +239,7 @@ async function main() {
       }
 
       if (info.hasPdfContainer || info.hasCanvas) {
-        console.log('\n  🎉 FOUND PaperLink PDF viewer (direct, no nesting)!');
+        console.log('\n  🎉 FOUND PDF Done Right PDF viewer (direct, no nesting)!');
         await cdpScreenshot(wsUrl, 'test/screenshots/02-webview-direct.png');
       }
 

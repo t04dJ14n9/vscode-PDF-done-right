@@ -1,5 +1,5 @@
 /**
- * Smoke-test driver for PaperLink.
+ * Smoke-test driver for PDF Done Right.
  *
  * Prerequisites: a dev VS Code instance running at `--remote-debugging-port=$PORT`
  * with the `vscode-PDF-done-right/test-workspace` folder opened. (See README.)
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
   });
   await sleep(8000);
 
-  // 2. Probe every iframe for the PaperLink viewer
+  // 2. Probe every iframe for the PDF Done Right viewer
   targets = await getTargets();
   const iframes = targets.filter(t => t.type === 'iframe');
   let pdfInfo: any = null;
@@ -129,14 +129,14 @@ async function main(): Promise<void> {
         returnByValue: true,
       });
       const info = JSON.parse(r.result.value);
-      if (info.title === 'PaperLink PDF Viewer') {
+      if (info.title === 'PDF Done Right Viewer') {
         pdfInfo = info;
-        console.log('Found PaperLink viewer:', JSON.stringify(info));
+        console.log('Found PDF Done Right viewer:', JSON.stringify(info));
       }
     } catch { /* ignore */ }
   }
 
-  expect(pdfInfo, 'PaperLink PDF viewer iframe exists');
+  expect(pdfInfo, 'PDF Done Right PDF viewer iframe exists');
   if (pdfInfo) {
     expect(pdfInfo.canvas >= 1, `canvas count >= 1 (got ${pdfInfo.canvas})`);
     expect(pdfInfo.pageWrappers >= 1, `pageWrappers >= 1 (got ${pdfInfo.pageWrappers})`);

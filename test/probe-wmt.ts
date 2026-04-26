@@ -25,7 +25,7 @@ async function main() {
         expression: '(function(){var f=document.querySelector("iframe");return f&&f.contentDocument?f.contentDocument.title:"";})()',
         returnByValue: true,
       });
-      return r.result.value === 'PaperLink PDF Viewer';
+      return r.result.value === 'PDF Done Right Viewer';
     } catch { return false; }
   });
   // Instead of async find, just iterate
@@ -36,7 +36,7 @@ async function main() {
         expression: '(function(){var f=document.querySelector("iframe");return f&&f.contentDocument?f.contentDocument.title:"";})()',
         returnByValue: true,
       });
-      if (r.result.value === 'PaperLink PDF Viewer') { vf = f; break; }
+      if (r.result.value === 'PDF Done Right Viewer') { vf = f; break; }
     } catch {}
   }
   if (!vf) { console.error('no viewer'); process.exit(2); }
