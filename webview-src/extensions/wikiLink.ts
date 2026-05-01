@@ -34,6 +34,7 @@ export type GetNoteHeadingsCallback = (noteName: string) => string[];
 export type OpenCodeRefCallback = (path: string, startLine?: number, endLine?: number) => void;
 export type OpenPdfRefCallback = (pdfPath: string, anchor: string) => void;
 export type ResolveImageSrcCallback = (imagePath: string) => Promise<string | null> | string | null;
+export type OpenImageCallback = (imagePath: string) => void;
 
 export interface WikiLinkConfig {
     resolveNote?: ResolveNoteCallback;
@@ -43,6 +44,7 @@ export interface WikiLinkConfig {
     onOpenCodeRef?: OpenCodeRefCallback;
     onOpenPdfRef?: OpenPdfRefCallback;
     resolveImageSrc?: ResolveImageSrcCallback;
+    onOpenImage?: OpenImageCallback;
 }
 
 // ─── Regex patterns ──────────────────────────────────────────────────────────
@@ -221,14 +223,26 @@ class ImageWikiWidget extends WidgetType {
         readonly imagePath: string,
         readonly caption: string | undefined,
         readonly resolveImageSrc: ResolveImageSrcCallback | undefined,
+        readonly onOpenImage: OpenImageCallback | undefined,
+        readonly previewBelow = false,
     ) {
         super();
     }
 
     override toDOM(): HTMLElement {
         const container = document.createElement('span');
-        container.className = 'cm-image-wiki';
+        container.className = this.previewBelow ? 'cm-image-wiki cm-image-wiki-preview-below' : 'cm-image-wiki';
         container.dataset.imagePath = this.imagePath;
+        container.title = 'Double-click to open image';
+        container.addEventListener('dblclick', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.onOpenImage?.(this.imagePath);
+        });
+
+        if (this.previewBelow) {
+            container.appendChild(document.createElement('br'));
+        }
 
         const img = document.createElement('img');
         img.className = 'cm-image-wiki-img';
@@ -245,11 +259,18 @@ class ImageWikiWidget extends WidgetType {
             }
         };
 
+        const renderImage = (src: string) => {
+            const fallback = container.querySelector('.cm-image-wiki-fallback');
+            fallback?.remove();
+            img.style.display = 'block';
+            img.src = src;
+        };
+
         if (this.resolveImageSrc) {
             const resolved = this.resolveImageSrc(this.imagePath);
             if (typeof resolved === 'string') {
                 if (resolved) {
-                    img.src = resolved;
+                    renderImage(resolved);
                 } else {
                     renderFallback();
                 }
@@ -260,7 +281,7 @@ class ImageWikiWidget extends WidgetType {
                             renderFallback();
                             return;
                         }
-                        img.src = src;
+                        renderImage(src);
                     })
                     .catch(() => {
                         renderFallback();
@@ -284,11 +305,12 @@ class ImageWikiWidget extends WidgetType {
         return (
             this.imagePath === other.imagePath
             && this.caption === other.caption
+            && this.previewBelow === other.previewBelow
         );
     }
 
     override ignoreEvent(): boolean {
-        return true;
+        return false;
     }
 }
 
@@ -330,10 +352,38 @@ function buildDecorations(
             ranges.push({ from: line.from, to: line.from, deco: pdfLineDeco });
         }
 
-        // Skip cursor lines for widget replacement decorations
-        if (cursorLines.has(i)) continue;
-
         const occupied: Array<{ from: number; to: number }> = [];
+
+        // Obsidian-style embedded image links stay rendered even on the cursor
+        // line, matching Obsidian live preview behavior for image embeds.
+        let match: RegExpExecArray | null;
+        IMAGE_WIKI_LINK_REGEX.lastIndex = 0;
+        while ((match = IMAGE_WIKI_LINK_REGEX.exec(line.text)) !== null) {
+            const from = line.from + match.index;
+            const to = from + match[0].length;
+            const imagePath = (match[1] ?? '').trim();
+            const caption = match[2]?.trim();
+            if (!isImagePath(imagePath)) continue;
+            imageCount++;
+            const cursorOnLine = cursorLines.has(i);
+            if (!cursorOnLine) {
+                occupied.push({ from, to });
+            }
+            ranges.push({
+                from: cursorOnLine ? to : from,
+                to: cursorOnLine ? to : to,
+                deco: cursorOnLine ? Decoration.widget({
+                    widget: new ImageWikiWidget(imagePath, caption, config.resolveImageSrc, config.onOpenImage, true),
+                    side: 1,
+                }) : Decoration.replace({
+                    widget: new ImageWikiWidget(imagePath, caption, config.resolveImageSrc, config.onOpenImage),
+                }),
+            });
+        }
+
+        // Skip non-image widget replacements on cursor lines so text links stay
+        // editable while the image preview remains open.
+        if (cursorLines.has(i)) continue;
 
         // PDF links first — Obsidian-style PDF links are also plain [[...]]
         // and would otherwise be treated as wiki links.
@@ -351,27 +401,6 @@ function buildDecorations(
                         pdfMatch.anchor,
                         pdfMatch.snippet || undefined,
                     ),
-                }),
-            });
-        }
-
-        // Obsidian-style embedded image links: ![[image.png]]
-        let match: RegExpExecArray | null;
-        IMAGE_WIKI_LINK_REGEX.lastIndex = 0;
-        while ((match = IMAGE_WIKI_LINK_REGEX.exec(line.text)) !== null) {
-            const from = line.from + match.index;
-            const to = from + match[0].length;
-            const imagePath = (match[1] ?? '').trim();
-            const caption = match[2]?.trim();
-            if (!isImagePath(imagePath)) continue;
-            if (occupied.some(r => from < r.to && to > r.from)) continue;
-            occupied.push({ from, to });
-            imageCount++;
-            ranges.push({
-                from,
-                to,
-                deco: Decoration.replace({
-                    widget: new ImageWikiWidget(imagePath, caption, config.resolveImageSrc),
                 }),
             });
         }
@@ -538,10 +567,21 @@ export function wikiLink(config: WikiLinkConfig = {}) {
     const clickListener = ViewPlugin.fromClass(class {
         constructor(readonly view: EditorView) {
             this.view.dom.addEventListener('click', this.onClick);
+            this.view.dom.addEventListener('dblclick', this.onDoubleClick);
         }
         destroy() {
             this.view.dom.removeEventListener('click', this.onClick);
+            this.view.dom.removeEventListener('dblclick', this.onDoubleClick);
         }
+        onDoubleClick = (event: MouseEvent) => {
+            const target = event.target as HTMLElement;
+            const imageEl = target.closest<HTMLElement>('.cm-image-wiki');
+            const imagePath = imageEl?.dataset.imagePath;
+            if (!imagePath || !config.onOpenImage) return;
+            event.preventDefault();
+            event.stopPropagation();
+            config.onOpenImage(imagePath);
+        };
         onClick = (event: MouseEvent) => {
             const wantsFollow = event.metaKey || event.ctrlKey;
             if (!wantsFollow) {
@@ -667,6 +707,10 @@ export function wikiLink(config: WikiLinkConfig = {}) {
             marginTop: '4px',
             marginBottom: '4px',
             verticalAlign: 'top',
+        },
+        '.cm-image-wiki-preview-below': {
+            display: 'inline',
+            marginLeft: '0',
         },
         '.cm-image-wiki-img': {
             display: 'block',

@@ -14,6 +14,7 @@
  *     { type: 'openFile'; path: string }
  *     { type: 'openCodeRef'; path: string; startLine?: number; endLine?: number }
  *     { type: 'openPdfRef'; pdfPath: string; anchor: string }
+ *     { type: 'openImage'; path: string }
  *     { type: 'openExternal'; url: string }
  */
 
@@ -33,10 +34,11 @@ window.addEventListener('unhandledrejection', (ev) => {
   } catch { /* ignore */ }
 });
 
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightSpecialChars, ViewUpdate } from '@codemirror/view';
+import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightSpecialChars, ViewPlugin, Decoration, ViewUpdate } from '@codemirror/view';
+import type { DecorationSet } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { defaultHighlightStyle, syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap, HighlightStyle } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
@@ -96,6 +98,8 @@ const vimModeCompartment = new Compartment();
 const hybridRenderingCompartment = new Compartment();
 const codeFenceHidingCompartment = new Compartment();
 const syntaxHighlightingCompartment = new Compartment();
+const editorThemeCompartment = new Compartment();
+const bracketMatchingCompartment = new Compartment();
 
 // ─── VS Code API ────────────────────────────────────────────────────────────
 
@@ -139,6 +143,9 @@ const wikiLinkConfig: WikiLinkConfig = {
     vscodeApi.postMessage({ type: 'openPdfRef', pdfPath, anchor });
   },
   resolveImageSrc: (imagePath: string) => requestImageData(imagePath),
+  onOpenImage: (imagePath: string) => {
+    vscodeApi.postMessage({ type: 'openImage', path: imagePath });
+  },
 };
 
 const cmdClickConfig: CmdClickLinkConfig = {
@@ -158,46 +165,57 @@ function getAppearance(): 'dark' | 'light' {
   return document.body.classList.contains('vscode-light') ? 'light' : 'dark';
 }
 
-const editorTheme = EditorView.theme({
-  '&': {
-    height: '100%',
-    fontSize: `${settings.fontSize}px`,
-    fontFamily: settings.fontFamily,
-  },
-  '.cm-scroller': {
-    fontFamily: settings.fontFamily,
-    overflow: 'auto',
-  },
-  '.cm-content': {
-    caretColor: 'var(--vscode-editorCursor-foreground, #aeafad)',
-    lineHeight: String(settings.lineHeight),
-    padding: '8px 0',
-  },
-  '.cm-cursor': {
-    borderLeftColor: 'var(--vscode-editorCursor-foreground, #aeafad)',
-    borderLeftWidth: '2px',
-  },
-  '.cm-selectionBackground': {
-    backgroundColor: 'var(--vscode-editor-selectionBackground, #264f78) !important',
-  },
-  '.cm-focused .cm-selectionBackground': {
-    backgroundColor: 'var(--vscode-editor-selectionBackground, #264f78) !important',
-  },
-  '.cm-gutters': {
-    backgroundColor: 'var(--vscode-editorGutter-background, #1e1e1e)',
-    color: 'var(--vscode-editorGutter-foreground, #858585)',
-    borderRight: '1px solid var(--vscode-editorGutter-border, #3e3e42)',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: 'var(--vscode-editorIndentGuide-background1, #2a2d2e)',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'var(--vscode-editor-lineHighlightBackground, #2a2d2e)',
-  },
-  '&.cm-focused': {
-    outline: 'none',
-  },
-}, { dark: true });
+function createEditorTheme() {
+  return EditorView.theme({
+    '&': {
+      height: '100%',
+      fontSize: `${settings.fontSize}px`,
+      fontFamily: settings.fontFamily,
+    },
+    '.cm-scroller': {
+      fontFamily: settings.fontFamily,
+      overflow: 'auto',
+    },
+    '.cm-content': {
+      caretColor: 'var(--vscode-editorCursor-foreground, #aeafad)',
+      lineHeight: String(settings.lineHeight),
+      padding: '8px 0',
+    },
+    '.cm-cursor': {
+      borderLeftColor: 'var(--vscode-editorCursor-foreground, #aeafad)',
+      borderLeftWidth: '2px',
+    },
+    '.cm-selectionLayer .cm-selectionBackground': {
+      backgroundColor: 'var(--vscode-editor-inactiveSelectionBackground, rgba(38, 79, 120, 0.55)) !important',
+    },
+    '.cm-focused .cm-selectionLayer .cm-selectionBackground': {
+      backgroundColor: 'var(--vscode-editor-selectionBackground, #264f78) !important',
+    },
+    '.cm-focused .cm-activeLine .cm-selectionBackground': {
+      backgroundColor: 'var(--vscode-editor-selectionBackground, #264f78) !important',
+    },
+    '.cm-content ::selection': {
+      backgroundColor: 'var(--vscode-editor-selectionBackground, #264f78) !important',
+    },
+    '.cm-line ::selection': {
+      backgroundColor: 'var(--vscode-editor-selectionBackground, #264f78) !important',
+    },
+    '.cm-gutters': {
+      backgroundColor: 'var(--vscode-editorGutter-background, #1e1e1e)',
+      color: 'var(--vscode-editorGutter-foreground, #858585)',
+      borderRight: '1px solid var(--vscode-editorGutter-border, #3e3e42)',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'var(--vscode-editorIndentGuide-background1, #2a2d2e)',
+    },
+    '.cm-activeLine': {
+      backgroundColor: 'color-mix(in srgb, var(--vscode-editor-lineHighlightBackground, rgba(42, 45, 46, 0.45)) 45%, transparent)',
+    },
+    '&.cm-focused': {
+      outline: 'none',
+    },
+  }, { dark: getAppearance() === 'dark' });
+}
 
 // ─── Save keymap ────────────────────────────────────────────────────────────
 
@@ -209,6 +227,99 @@ const saveKeymap = keymap.of([{
   },
   preventDefault: true,
 }]);
+
+function surroundSelections(left: string, right = left) {
+  return (view: EditorView): boolean => {
+    const range = view.state.selection.main;
+    const selected = view.state.sliceDoc(range.from, range.to);
+
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert: `${left}${selected}${right}` },
+      selection: {
+        anchor: range.from + left.length,
+        head: range.to + left.length,
+      },
+      scrollIntoView: true,
+    });
+    return true;
+  };
+}
+
+function toggleTaskOnSelectedLines(view: EditorView): boolean {
+  const lines = new Map<number, { from: number; to: number; text: string }>();
+  for (const range of view.state.selection.ranges) {
+    const startLine = view.state.doc.lineAt(range.from).number;
+    const endLine = view.state.doc.lineAt(range.to).number;
+    for (let n = startLine; n <= endLine; n++) {
+      const line = view.state.doc.line(n);
+      lines.set(n, { from: line.from, to: line.to, text: line.text });
+    }
+  }
+
+  if (lines.size === 0) return false;
+
+  const taskRegex = /^(\s*(?:[-+*]|\d+\.)\s+)\[(?: |x|X|1)\]/;
+  const listRegex = /^(\s*(?:[-+*]|\d+\.)\s+)(?!\[)/;
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+
+  for (const [, line] of [...lines.entries()].sort((a, b) => b[0] - a[0])) {
+    const taskMatch = taskRegex.exec(line.text);
+    if (taskMatch) {
+      const prefix = taskMatch[1] ?? '';
+      const markerStart = line.from + prefix.length;
+      const markerEnd = markerStart + 3;
+      const current = line.text.slice(prefix.length, prefix.length + 3).toLowerCase();
+      const next = current === '[x]' || current === '[1]' ? '[ ]' : '[x]';
+      changes.push({ from: markerStart, to: markerEnd, insert: next });
+      continue;
+    }
+
+    const listMatch = listRegex.exec(line.text);
+    if (listMatch) {
+      const prefix = listMatch[1] ?? '';
+      const markerPos = line.from + prefix.length;
+      changes.push({ from: markerPos, to: markerPos, insert: '[ ] ' });
+      continue;
+    }
+
+    const insertPos = line.from;
+    const leadingWhitespace = /^\s*/.exec(line.text)?.[0] ?? '';
+    changes.push({ from: insertPos + leadingWhitespace.length, to: insertPos + leadingWhitespace.length, insert: '- [ ] ' });
+  }
+
+  if (changes.length === 0) return false;
+
+  view.dispatch({ changes, scrollIntoView: true });
+  return true;
+}
+
+const obsidianMarkdownKeymap = keymap.of([
+  {
+    key: 'Mod-b',
+    run: surroundSelections('**'),
+    preventDefault: true,
+  },
+  {
+    key: 'Mod-i',
+    run: surroundSelections('*'),
+    preventDefault: true,
+  },
+  {
+    key: 'Mod-Shift-s',
+    run: surroundSelections('~~'),
+    preventDefault: true,
+  },
+  {
+    key: 'Mod-e',
+    run: surroundSelections('`'),
+    preventDefault: true,
+  },
+  {
+    key: 'Mod-Enter',
+    run: toggleTaskOnSelectedLines,
+    preventDefault: true,
+  },
+]);
 
 const obsidianCodeHighlightStyle = HighlightStyle.define([
   { tag: [t.keyword, t.controlKeyword, t.definitionKeyword, t.moduleKeyword], color: 'var(--paperlink-code-keyword, #c792ea)' },
@@ -267,6 +378,41 @@ const pasteImageHandler = EditorView.domEventHandlers({
   },
 });
 
+const activeLineDecoration = Decoration.line({ class: 'cm-activeLine' });
+
+function buildActiveLineDecorations(view: EditorView): DecorationSet {
+  if (view.state.selection.ranges.some(range => !range.empty)) {
+    return Decoration.none;
+  }
+
+  const decorations = view.state.selection.ranges.map(range => {
+    const line = view.state.doc.lineAt(range.head);
+    return activeLineDecoration.range(line.from);
+  });
+  return Decoration.set(decorations, true);
+}
+
+function selectionAwareActiveLine() {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+
+      constructor(view: EditorView) {
+        this.decorations = buildActiveLineDecorations(view);
+      }
+
+      update(update: ViewUpdate) {
+        if (update.docChanged || update.selectionSet || update.viewportChanged) {
+          this.decorations = buildActiveLineDecorations(update.view);
+        }
+      }
+    },
+    {
+      decorations: plugin => plugin.decorations,
+    },
+  );
+}
+
 // ─── Build extensions ───────────────────────────────────────────────────────
 
 function buildExtensions() {
@@ -278,13 +424,13 @@ function buildExtensions() {
     EditorState.allowMultipleSelections.of(true),
     indentOnInput(),
     syntaxHighlightingCompartment.of(getSyntaxHighlightExtensions()),
-    bracketMatching(),
+    bracketMatchingCompartment.of(settings.bracketPairColorization ? bracketMatching() : []),
     closeBrackets(),
     autocompletion({
       override: [wikiLinkCompletion(wikiLinkConfig)],
     }),
     foldGutter(),
-    highlightActiveLine(),
+    selectionAwareActiveLine(),
     highlightActiveLineGutter(),
     highlightSelectionMatches(),
     rectangularSelection(),
@@ -297,6 +443,7 @@ function buildExtensions() {
       EditorView.contentAttributes.of({ spellcheck: String(settings.spellcheck) })
     ),
     keymap.of([
+      ...markdownKeymap,
       ...closeBracketsKeymap,
       ...defaultKeymap,
       ...searchKeymap,
@@ -308,13 +455,14 @@ function buildExtensions() {
     ]),
     isolateArrowKeys,
     pasteImageHandler,
+    obsidianMarkdownKeymap,
     saveKeymap,
     cmdClickLink(cmdClickConfig),
     wikiLink(wikiLinkConfig),
     hybridRenderingCompartment.of(settings.hybridRendering ? hybridRendering() : []),
     codeFenceHidingCompartment.of(settings.codeFenceHiding ? codeFenceHiding() : []),
     vimModeCompartment.of(settings.vimMode ? [vim()] : []),
-    editorTheme,
+    editorThemeCompartment.of(createEditorTheme()),
   ];
 }
 
@@ -376,6 +524,17 @@ function applySettings(newSettings: Partial<EditorSettings>): void {
   }
   if (prev.syntaxHighlighting !== settings.syntaxHighlighting) {
     effects.push(syntaxHighlightingCompartment.reconfigure(getSyntaxHighlightExtensions()));
+  }
+  if (prev.bracketPairColorization !== settings.bracketPairColorization) {
+    effects.push(bracketMatchingCompartment.reconfigure(settings.bracketPairColorization ? bracketMatching() : []));
+  }
+  if (
+    prev.fontFamily !== settings.fontFamily
+    || prev.fontSize !== settings.fontSize
+    || prev.lineHeight !== settings.lineHeight
+    || prev.editorTheme !== settings.editorTheme
+  ) {
+    effects.push(editorThemeCompartment.reconfigure(createEditorTheme()));
   }
 
   if (effects.length > 0 && view) {
@@ -468,9 +627,11 @@ window.addEventListener('message', ev => {
         const pdfLinks = document.querySelectorAll('.cm-pdf-link');
         const codeLinks = document.querySelectorAll('.cm-code-link');
         const wikiLinks = document.querySelectorAll('.cm-wiki-link');
+        const imageLinks = document.querySelectorAll('.cm-image-wiki');
         diag.pdfLinkCount = pdfLinks.length;
         diag.codeLinkCount = codeLinks.length;
         diag.wikiLinkCount = wikiLinks.length;
+        diag.imageLinkCount = imageLinks.length;
 
         // Check if pdf links have data attributes
         if (pdfLinks.length > 0) {
@@ -480,6 +641,29 @@ window.addEventListener('message', ev => {
             anchor: first.dataset.anchor,
             className: first.className,
             innerHTML: first.innerHTML.slice(0, 200),
+          };
+        }
+
+        if (imageLinks.length > 0) {
+          const first = imageLinks[0] as HTMLElement;
+          const img = first.querySelector('img') as HTMLImageElement | null;
+          const rect = first.getBoundingClientRect();
+          const imgRect = img?.getBoundingClientRect();
+          const lineRect = first.closest('.cm-line')?.getBoundingClientRect();
+          diag.firstImageLink = {
+            imagePath: first.dataset.imagePath,
+            textContent: first.textContent?.slice(0, 200),
+            visible: rect.width > 0 && rect.height > 0,
+            width: rect.width,
+            height: rect.height,
+            top: rect.top,
+            imgTop: imgRect?.top,
+            lineTop: lineRect?.top,
+            imgTopDeltaFromLine: imgRect && lineRect ? imgRect.top - lineRect.top : undefined,
+            imgDisplay: img?.style.display,
+            imgComplete: img?.complete,
+            imgNaturalWidth: img?.naturalWidth,
+            imgSrcPrefix: img?.src?.slice(0, 30),
           };
         }
 
@@ -586,6 +770,70 @@ window.addEventListener('message', ev => {
         diag.errors = [];
       }
       vscodeApi.postMessage(diag);
+      break;
+    }
+    case 'imageDoubleClickTest': {
+      const result: any = { type: 'imageDoubleClickTest' };
+      const imageLinks = document.querySelectorAll('.cm-image-wiki');
+      if (imageLinks.length === 0) {
+        result.error = 'No .cm-image-wiki elements found in DOM';
+      } else {
+        const first = imageLinks[0] as HTMLElement;
+        result.imagePath = first.dataset.imagePath;
+        const event = new MouseEvent('dblclick', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        });
+        result.dispatched = first.dispatchEvent(event);
+      }
+      vscodeApi.postMessage(result);
+      break;
+    }
+    case 'imagePasteTest': {
+      const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/luz3WQAAAABJRU5ErkJggg==';
+      vscodeApi.postMessage({ type: 'pasteImage', mimeType: 'image/png', dataUrl });
+      vscodeApi.postMessage({ type: 'imagePasteTest', dispatched: true });
+      break;
+    }
+    case 'imageCursorLineTest': {
+      const result: any = { type: 'imageCursorLineTest' };
+      if (!view) {
+        result.error = 'No editor view';
+        vscodeApi.postMessage(result);
+        break;
+      }
+
+      const docText = view.state.doc.toString();
+      const match = /!\[\[[^\]]+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:\|[^\]]*)?\]\]/i.exec(docText);
+      if (!match) {
+        result.error = 'No image embed found';
+        vscodeApi.postMessage(result);
+        break;
+      }
+
+      view.dispatch({
+        selection: { anchor: match.index + 2 },
+        scrollIntoView: true,
+      });
+      window.setTimeout(() => {
+        try {
+          const image = document.querySelector('.cm-image-wiki') as HTMLElement | null;
+          const img = image?.querySelector('img') as HTMLImageElement | null;
+          const imageRect = image?.getBoundingClientRect();
+          const imgRect = img?.getBoundingClientRect();
+          const lineRect = image?.closest('.cm-line')?.getBoundingClientRect();
+          result.imagePath = image?.dataset.imagePath;
+          result.className = image?.className;
+          result.firstLineText = image?.closest('.cm-line')?.textContent?.slice(0, 100);
+          result.imgTopDeltaFromLine = imgRect && lineRect ? imgRect.top - lineRect.top : undefined;
+          result.visible = !!imageRect && imageRect.width > 0 && imageRect.height > 0;
+          result.imgNaturalWidth = img?.naturalWidth;
+        } catch (error) {
+          result.error = error instanceof Error ? error.message : String(error);
+        }
+        vscodeApi.postMessage(result);
+      }, 50);
       break;
     }
     case 'clickTest': {

@@ -6,6 +6,7 @@ import {
   formatImageTimestamp,
   imageExtensionFromMime,
   mimeFromPath,
+  resolveMarkdownEditorSettings,
   parseImageDataUrl,
   resolveImagePath,
   resolveMarkdownTypography,
@@ -80,6 +81,70 @@ suite('markdownEditorProvider', () => {
     assert.strictEqual(resolved.fontFamily, 'Markdown Font');
     assert.strictEqual(resolved.fontSize, 15);
     assert.strictEqual(resolved.lineHeight, 1.7);
+  });
+
+  test('resolveMarkdownEditorSettings falls back to VS Code editor settings', () => {
+    const markdownCfg = {
+      get: <T>(section: string, defaultValue?: T) => {
+        if (section === 'fontFamily') return 'Markdown Font' as unknown as T;
+        if (section === 'fontSize') return 14 as unknown as T;
+        if (section === 'lineHeight') return 1.6 as unknown as T;
+        return defaultValue as T;
+      },
+      inspect: <T>(section: string) => ({ key: section, defaultValue: undefined as T }),
+    };
+    const editorCfg = {
+      get: <T>(section: string, defaultValue?: T) => {
+        if (section === 'fontFamily') return 'Editor Font' as unknown as T;
+        if (section === 'fontSize') return 17 as unknown as T;
+        if (section === 'lineHeight') return 34 as unknown as T;
+        if (section === 'lineNumbers') return 'off' as unknown as T;
+        if (section === 'wordWrap') return 'off' as unknown as T;
+        if (section === 'tabSize') return 6 as unknown as T;
+        if (section === 'bracketPairColorization.enabled') return false as unknown as T;
+        return defaultValue as T;
+      },
+    };
+
+    const resolved = resolveMarkdownEditorSettings(markdownCfg, editorCfg);
+    assert.strictEqual(resolved.fontFamily, 'Editor Font');
+    assert.strictEqual(resolved.fontSize, 17);
+    assert.strictEqual(resolved.lineHeight, 2);
+    assert.strictEqual(resolved.lineNumbers, false);
+    assert.strictEqual(resolved.wordWrap, false);
+    assert.strictEqual(resolved.tabSize, 6);
+    assert.strictEqual(resolved.bracketPairColorization, false);
+  });
+
+  test('resolveMarkdownEditorSettings keeps explicit PaperLink overrides', () => {
+    const explicit = new Set(['lineNumbers', 'wordWrap', 'tabSize', 'bracketPairColorization']);
+    const markdownCfg = {
+      get: <T>(section: string, defaultValue?: T) => {
+        if (section === 'lineNumbers') return true as unknown as T;
+        if (section === 'wordWrap') return true as unknown as T;
+        if (section === 'tabSize') return 2 as unknown as T;
+        if (section === 'bracketPairColorization') return true as unknown as T;
+        return defaultValue as T;
+      },
+      inspect: <T>(section: string) => explicit.has(section)
+        ? ({ key: section, workspaceValue: true as T })
+        : ({ key: section, defaultValue: undefined as T }),
+    };
+    const editorCfg = {
+      get: <T>(section: string, defaultValue?: T) => {
+        if (section === 'lineNumbers') return 'off' as unknown as T;
+        if (section === 'wordWrap') return 'off' as unknown as T;
+        if (section === 'tabSize') return 8 as unknown as T;
+        if (section === 'bracketPairColorization.enabled') return false as unknown as T;
+        return defaultValue as T;
+      },
+    };
+
+    const resolved = resolveMarkdownEditorSettings(markdownCfg, editorCfg);
+    assert.strictEqual(resolved.lineNumbers, true);
+    assert.strictEqual(resolved.wordWrap, true);
+    assert.strictEqual(resolved.tabSize, 2);
+    assert.strictEqual(resolved.bracketPairColorization, true);
   });
 
   test('formatImageTimestamp outputs Obsidian-style timestamp', () => {
@@ -158,6 +223,28 @@ suite('markdownEditorProvider', () => {
       assert.strictEqual(
         await resolveImagePath('missing.png', documentPath, tempRoot),
         null,
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('resolveImagePath checks note-local .asset fallback', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'paperlink-md-provider-'));
+    try {
+      const notesDir = path.join(tempRoot, 'notes');
+      const noteAssetDir = path.join(notesDir, '.asset');
+      await fs.mkdir(noteAssetDir, { recursive: true });
+
+      const documentPath = path.join(notesDir, 'daily.md');
+      await fs.writeFile(documentPath, '# test');
+
+      const pastedImage = path.join(noteAssetDir, 'Pasted image 20260425235042.png');
+      await fs.writeFile(pastedImage, Buffer.from([3]));
+
+      assert.strictEqual(
+        await resolveImagePath('Pasted image 20260425235042.png', documentPath, tempRoot),
+        path.normalize(pastedImage),
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

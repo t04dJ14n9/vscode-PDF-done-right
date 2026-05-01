@@ -196,18 +196,18 @@
         "paperlink.markdown.lineNumbers": {
           "type": "boolean",
           "default": true,
-          "description": "Show line numbers in the PDF Done Right markdown editor."
+          "description": "Show line numbers in the PDF Done Right markdown editor. When unset by the user, this follows editor.lineNumbers."
         },
         "paperlink.markdown.wordWrap": {
           "type": "boolean",
           "default": true,
-          "description": "Enable word wrap in the PDF Done Right markdown editor."
+          "description": "Enable word wrap in the PDF Done Right markdown editor. When unset by the user, this follows editor.wordWrap."
         },
         "paperlink.markdown.tabSize": {
           "type": "number",
           "default": 2,
-          "enum": [2, 4, 8],
-          "description": "Tab size in the PDF Done Right markdown editor."
+          "minimum": 1,
+          "description": "Tab size in the PDF Done Right markdown editor. When unset by the user, this follows editor.tabSize."
         },
         "paperlink.markdown.spellcheck": {
           "type": "boolean",
@@ -243,7 +243,7 @@
         "paperlink.markdown.bracketPairColorization": {
           "type": "boolean",
           "default": true,
-          "description": "Enable bracket pair colorization in the PDF Done Right markdown editor."
+          "description": "Enable bracket matching in the PDF Done Right markdown editor. When unset by the user, this follows editor.bracketPairColorization.enabled."
         }
       }
     },

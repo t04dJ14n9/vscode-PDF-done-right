@@ -81,18 +81,16 @@ class TaskCheckboxWidget extends WidgetType {
         // Find the line that contains this checkbox
         const line = doc.lineAt(this.lineFrom);
         const text = line.text;
-        const toggle = this.checked ? '[x]' : '[ ]';
+        const toggleMatch = /\[(?: |x|X|1)\]/.exec(text);
+        if (!toggleMatch) return;
         const replaceWith = this.checked ? '[ ]' : '[x]';
-        const idx = text.indexOf(toggle);
-        if (idx !== -1) {
-          view.dispatch({
-            changes: {
-              from: line.from + idx,
-              to: line.from + idx + toggle.length,
-              insert: replaceWith,
-            },
-          });
-        }
+        view.dispatch({
+          changes: {
+            from: line.from + toggleMatch.index,
+            to: line.from + toggleMatch.index + toggleMatch[0].length,
+            insert: replaceWith,
+          },
+        });
       }
     });
     return el;
@@ -324,7 +322,7 @@ function applyLineDecorations(
   }
 
   // Task list lines
-  const taskMatch = text.match(/^(\s*)([-*+])\s+\[([ xX])\]\s/);
+  const taskMatch = text.match(/^(\s*)([-*+])\s+\[([ xX1])\]\s/);
   if (taskMatch) {
     decorations.push(taskListLineDeco.range(line.from));
     return;
@@ -409,8 +407,8 @@ function processLine(
     replacedRanges.push({ from: line.from, to: line.from + prefixLen });
   }
 
-  // ── Task list: - [x] text / - [ ] text ──
-  const taskMatch = text.match(/^(\s*)([-*+])\s+\[([ xX])\]\s/);
+  // ── Task list: - [x] text / - [1] text / - [ ] text ──
+  const taskMatch = text.match(/^(\s*)([-*+])\s+\[([ xX1])\]\s/);
   if (taskMatch && !headingMatch) {
     const fullPrefix = taskMatch[0];
     const checked = taskMatch[3] !== ' ' && taskMatch[3] !== undefined;

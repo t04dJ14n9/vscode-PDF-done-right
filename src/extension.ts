@@ -21,7 +21,13 @@ import {
 
 export async function activate(
   context: vscode.ExtensionContext,
-): Promise<{ extendMarkdownIt: (md: any) => any; requestMarkdownDiagnostic: (uri?: vscode.Uri) => Promise<any> }> {
+): Promise<{
+  extendMarkdownIt: (md: any) => any;
+  requestMarkdownDiagnostic: (uri?: vscode.Uri) => Promise<any>;
+  requestMarkdownImageDoubleClickTest: (uri: vscode.Uri) => Promise<any>;
+  requestMarkdownImagePasteTest: (uri: vscode.Uri) => Promise<any>;
+  requestMarkdownImageCursorLineTest: (uri: vscode.Uri) => Promise<any>;
+}> {
   const gitRoot = getGitRoot();
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const projectRoot = gitRoot ?? workspaceRoot;
@@ -306,6 +312,18 @@ export async function activate(
     return mdEditorProvider.requestDiagnostic();
   };
 
+  const requestMarkdownImageDoubleClickTest = async (uri: vscode.Uri) => {
+    return mdEditorProvider.imageDoubleClickTestForDocument(uri);
+  };
+
+  const requestMarkdownImagePasteTest = async (uri: vscode.Uri) => {
+    return mdEditorProvider.imagePasteTestForDocument(uri);
+  };
+
+  const requestMarkdownImageCursorLineTest = async (uri: vscode.Uri) => {
+    return mdEditorProvider.imageCursorLineTestForDocument(uri);
+  };
+
   // Legacy PDF-outline + show-annotations commands
   context.subscriptions.push(
     vscode.commands.registerCommand('paperlink.openPdfAtAnchor', async (args: any) => {
@@ -368,6 +386,9 @@ export async function activate(
   return {
     extendMarkdownIt: activateMarkdownItPlugin,
     requestMarkdownDiagnostic,
+    requestMarkdownImageDoubleClickTest,
+    requestMarkdownImagePasteTest,
+    requestMarkdownImageCursorLineTest,
   };
 }
 

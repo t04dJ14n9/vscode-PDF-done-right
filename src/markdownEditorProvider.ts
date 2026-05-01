@@ -27,6 +27,7 @@ import { IndexService } from './index/indexService';
  *     { type: 'openExternal'; url: string }
  *     { type: 'pasteImage'; mimeType: string; dataUrl: string }
  *     { type: 'requestImageData'; requestId: string; path: string }
+ *     { type: 'openImage'; path: string }
  */
 export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'paperlink.markdownEditor';
@@ -53,6 +54,21 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   /** Simulate clicking the first @pdf link in the active markdown editor */
   async clickTest(): Promise<any> {
     return this._sendAndReceive('clickTest');
+  }
+
+  /** Simulate double-clicking the first embedded image in a document webview */
+  async imageDoubleClickTestForDocument(uri: vscode.Uri): Promise<any> {
+    return this._sendAndReceive('imageDoubleClickTest', 5000, uri.toString());
+  }
+
+  /** Simulate pasting an image into a document webview */
+  async imagePasteTestForDocument(uri: vscode.Uri): Promise<any> {
+    return this._sendAndReceive('imagePasteTest', 5000, uri.toString());
+  }
+
+  /** Move the cursor onto the first embedded image and report its preview geometry */
+  async imageCursorLineTestForDocument(uri: vscode.Uri): Promise<any> {
+    return this._sendAndReceive('imageCursorLineTest', 5000, uri.toString());
   }
 
   private async _sendAndReceive(type: string, timeoutMs = 5000, targetUri?: string): Promise<any> {
@@ -105,6 +121,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Track whether an edit originated from the webview to avoid echo loops.
     let ignoreNextChange = false;
+    let saveAfterNextWebviewEdit = false;
 
     const pushText = () => {
       webviewPanel.webview.postMessage({
@@ -116,26 +133,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const pushSettings = () => {
       const cfg = vscode.workspace.getConfiguration('paperlink.markdown');
       const editorCfg = vscode.workspace.getConfiguration('editor');
-      const vimMode = resolveMarkdownVimMode(cfg);
-      const typography = resolveMarkdownTypography(cfg, editorCfg);
+      const resolvedSettings = resolveMarkdownEditorSettings(cfg, editorCfg);
 
       webviewPanel.webview.postMessage({
         type: 'setSettings',
-        settings: {
-          fontFamily: typography.fontFamily,
-          fontSize: typography.fontSize,
-          lineHeight: typography.lineHeight,
-          lineNumbers: cfg.get<boolean>('lineNumbers'),
-          wordWrap: cfg.get<boolean>('wordWrap'),
-          tabSize: cfg.get<number>('tabSize'),
-          spellcheck: cfg.get<boolean>('spellcheck'),
-          vimMode,
-          editorTheme: cfg.get<string>('editorTheme'),
-          hybridRendering: cfg.get<boolean>('hybridRendering'),
-          codeFenceHiding: cfg.get<boolean>('codeFenceHiding'),
-          syntaxHighlighting: cfg.get<boolean>('syntaxHighlighting'),
-          bracketPairColorization: cfg.get<boolean>('bracketPairColorization'),
-        },
+        settings: resolvedSettings,
       });
     };
 
@@ -155,6 +157,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         || e.affectsConfiguration('editor.fontFamily')
         || e.affectsConfiguration('editor.fontSize')
         || e.affectsConfiguration('editor.lineHeight')
+        || e.affectsConfiguration('editor.lineNumbers')
+        || e.affectsConfiguration('editor.wordWrap')
+        || e.affectsConfiguration('editor.tabSize')
+        || e.affectsConfiguration('editor.bracketPairColorization.enabled')
       ) {
         pushSettings();
       }
@@ -196,6 +202,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             newText,
           );
           await vscode.workspace.applyEdit(edit);
+          if (saveAfterNextWebviewEdit) {
+            saveAfterNextWebviewEdit = false;
+            await document.save();
+          }
           break;
         }
 
@@ -264,6 +274,17 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           break;
         }
 
+        case 'openImage': {
+          const imagePath = String(msg.path ?? '').trim();
+          const abs = await resolveImagePath(imagePath, document.uri.fsPath, this.gitRoot);
+          if (!abs) {
+            console.warn(`[PDFDR MD] Cannot open image — not found: ${imagePath}`);
+            break;
+          }
+          await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(abs), vscode.ViewColumn.Beside);
+          break;
+        }
+
         case 'pasteImage': {
           if (!this.gitRoot) {
             console.warn('[PDFDR MD] Cannot paste image — no gitRoot');
@@ -292,6 +313,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           }
 
           await vscode.workspace.fs.writeFile(vscode.Uri.file(absPath), bytes);
+          saveAfterNextWebviewEdit = true;
           webviewPanel.webview.postMessage({ type: 'insertText', text: `![[${fileName}]]` });
           break;
         }
@@ -377,9 +399,120 @@ export interface MarkdownTypographySettings {
   lineHeight: number;
 }
 
+export interface MarkdownEditorSettings extends MarkdownTypographySettings {
+  lineNumbers: boolean;
+  wordWrap: boolean;
+  tabSize: number;
+  spellcheck: boolean;
+  vimMode: boolean;
+  editorTheme: string;
+  hybridRendering: boolean;
+  codeFenceHiding: boolean;
+  syntaxHighlighting: boolean;
+  bracketPairColorization: boolean;
+}
+
+type ConfigLike = Pick<vscode.WorkspaceConfiguration, 'get'> & {
+  inspect?: vscode.WorkspaceConfiguration['inspect'];
+};
+
+function hasUserConfigured(cfg: ConfigLike, section: string): boolean {
+  const inspected = cfg.inspect?.(section) as Record<string, unknown> | undefined;
+  if (!inspected) return false;
+  return [
+    'globalValue',
+    'workspaceValue',
+    'workspaceFolderValue',
+    'defaultLanguageValue',
+    'globalLanguageValue',
+    'workspaceLanguageValue',
+    'workspaceFolderLanguageValue',
+  ].some(key => inspected[key] !== undefined);
+}
+
+function getMarkdownOrEditor<T>(
+  markdownCfg: ConfigLike,
+  markdownSection: string,
+  markdownDefault: T,
+  editorCfg: ConfigLike,
+  editorSection: string,
+  editorDefault: unknown,
+  normalize: (value: unknown) => T,
+): T {
+  if (hasUserConfigured(markdownCfg, markdownSection)) {
+    return markdownCfg.get<T>(markdownSection, markdownDefault);
+  }
+  return normalize(editorCfg.get(editorSection, editorDefault));
+}
+
+function editorLineNumbersToBoolean(value: unknown): boolean {
+  return value !== 'off' && value !== false;
+}
+
+function editorWordWrapToBoolean(value: unknown): boolean {
+  return value !== 'off' && value !== false;
+}
+
+function editorTabSizeToNumber(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 2;
+}
+
+export function resolveMarkdownEditorSettings(
+  markdownCfg: ConfigLike,
+  editorCfg: ConfigLike,
+): MarkdownEditorSettings {
+  const typography = resolveMarkdownTypography(markdownCfg, editorCfg);
+  return {
+    ...typography,
+    lineNumbers: getMarkdownOrEditor(
+      markdownCfg,
+      'lineNumbers',
+      true,
+      editorCfg,
+      'lineNumbers',
+      'on',
+      editorLineNumbersToBoolean,
+    ),
+    wordWrap: getMarkdownOrEditor(
+      markdownCfg,
+      'wordWrap',
+      true,
+      editorCfg,
+      'wordWrap',
+      'off',
+      editorWordWrapToBoolean,
+    ),
+    tabSize: getMarkdownOrEditor(
+      markdownCfg,
+      'tabSize',
+      2,
+      editorCfg,
+      'tabSize',
+      2,
+      editorTabSizeToNumber,
+    ),
+    spellcheck: markdownCfg.get<boolean>('spellcheck', true),
+    vimMode: resolveMarkdownVimMode(markdownCfg),
+    editorTheme: markdownCfg.get<string>('editorTheme', 'inherit'),
+    hybridRendering: markdownCfg.get<boolean>('hybridRendering', true),
+    codeFenceHiding: markdownCfg.get<boolean>('codeFenceHiding', true),
+    syntaxHighlighting: markdownCfg.get<boolean>('syntaxHighlighting', true),
+    bracketPairColorization: getMarkdownOrEditor(
+      markdownCfg,
+      'bracketPairColorization',
+      true,
+      editorCfg,
+      'bracketPairColorization.enabled',
+      true,
+      value => value !== false,
+    ),
+  };
+}
+
 export function resolveMarkdownTypography(
-  markdownCfg: Pick<vscode.WorkspaceConfiguration, 'get'>,
-  editorCfg: Pick<vscode.WorkspaceConfiguration, 'get'>,
+  markdownCfg: ConfigLike,
+  editorCfg: ConfigLike,
 ): MarkdownTypographySettings {
   const markdownFontFamily = markdownCfg.get<string>('fontFamily', 'JetBrains Mono, Menlo, Monaco, Courier New, monospace');
   const markdownFontSize = markdownCfg.get<number>('fontSize', 14);
@@ -454,6 +587,10 @@ export async function resolveImagePath(imagePath: string, documentPath: string, 
     candidates.push(imagePath);
   } else {
     candidates.push(path.join(docDir, imagePath));
+    if (!hasSeparator) {
+      candidates.push(path.join(docDir, '.asset', imagePath));
+      candidates.push(path.join(docDir, '.aseet', imagePath)); // legacy typo fallback
+    }
     if (gitRoot) {
       candidates.push(path.join(gitRoot, imagePath));
       if (!hasSeparator) {
